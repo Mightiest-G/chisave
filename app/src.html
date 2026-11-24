@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChiSave — Fresh food, sold before it spoils</title>
+<meta name="theme-color" content="#14532d">
+<meta name="description" content="Predicts which fresh food won't sell before its date, marks it down early, and texts your regulars the deal.">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="icon" type="image/png" href="./icon-192.png">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f4f6f3; color: #1c2420; }
+  header { background: #14532d; color: #fff; padding: 16px; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; opacity: .85; font-size: 14px; }
+  main { max-width: 720px; margin: 0 auto; padding: 12px; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+  .card { background: #fff; border-radius: 12px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card .big { font-size: 26px; font-weight: 700; }
+  .card .label { font-size: 13px; color: #5a6b60; }
+  .card.danger .big { color: #b91c1c; }
+  .card.good .big { color: #14532d; }
+  section { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  .item { border-top: 1px solid #e5e7eb; padding: 10px 0; }
+  .item:first-of-type { border-top: none; }
+  .item .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .item .name { font-weight: 650; }
+  .item .price { font-weight: 700; white-space: nowrap; }
+  .item .old { text-decoration: line-through; color: #888; font-weight: 400; margin-right: 6px; }
+  .item .meta { font-size: 13px; color: #5a6b60; margin-top: 2px; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 20px; }
+  .badge.md { background: #fef3c7; color: #92400e; }
+  .badge.exp { background: #fee2e2; color: #991b1b; }
+  .badge.ok { background: #dcfce7; color: #166534; }
+  .badge.est { background: #e0e7ff; color: #3730a3; }
+  .badge.printed { background: #d1fae5; color: #065f46; }
+  button { background: #14532d; color: #fff; border: none; border-radius: 10px; padding: 10px 16px; font-size: 15px; cursor: pointer; }
+  button.secondary { background: #e5e7eb; color: #1c2420; }
+  button:disabled { opacity: .5; }
+  input, select { width: 100%; padding: 10px; font-size: 16px; border: 1px solid #cbd5d1; border-radius: 10px; margin: 4px 0 10px; }
+  label { font-size: 14px; font-weight: 600; }
+  .hint { font-size: 13px; color: #5a6b60; }
+  .applied { opacity: .55; }
+  .applied .name { text-decoration: line-through; }
+  textarea { width: 100%; min-height: 90px; padding: 10px; font-size: 15px; border: 1px solid #cbd5d1; border-radius: 10px; }
+  .empty { color: #5a6b60; font-size: 14px; }
+  .small { font-size: 13px; padding: 6px 10px; }
+  .rowline { display: flex; gap: 8px; align-items: center; }
+  .rowline input { margin: 4px 0; }
+  .qty { width: 70px; flex: none; text-align: center; }
+  #camBox video { width: 100%; border-radius: 10px; background: #000; }
+  .thumb { max-width: 120px; border-radius: 8px; margin-top: 6px; display: block; }
+  footer { text-align: center; color: #5a6b60; font-size: 12px; padding: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ChiSave</h1>
+  <p id="storeLine">Demo store &middot; <span id="todayLine"></span></p>
+</header>
+<main>
+  <div class="cards">
+    <div class="card danger"><div class="big" id="statRisk">$0</div><div class="label">Food value about to be lost</div></div>
+    <div class="card good"><div class="big" id="statRecover">$0</div><div class="label">You can save with today's markdowns</div></div>
+    <div class="card"><div class="big" id="statMarkdown">0</div><div class="label">Items to mark down today</div></div>
+    <div class="card"><div class="big" id="statExpired">0</div><div class="label">Items past their date — pull them</div></div>
+  </div>
+
+  <section>
+    <h2>Today's markdown list</h2>
+    <p class="hint">These items won't sell out before their date. Mark them down now, while they can still sell. Tick the box once you've changed the price at the register.</p>
+    <div id="markdownList"></div>
+  </section>
+
+  <section>
+    <h2>Today's deal text</h2>
+    <p class="hint">Send this to your regulars by text. Tap a regular's name below to open it in your messaging app, ready to send. Or copy it.</p>
+    <textarea id="dealText" readonly></textarea><br><br>
+    <button id="copyDeal">Copy deal text</button>
+    <div id="textButtons" style="margin-top:10px"></div>
+  </section>
+
+  <section>
+    <h2>Log today's sales</h2>
+    <p class="hint">At closing, write how many of each item sold today. This is what the forecast learns from — the more days you log, the sharper it gets.</p>
+    <div id="salesLog"></div>
+    <button id="saveSalesBtn">Save today's sales</button>
+    <span id="salesMsg" class="hint"></span>
+    <hr style="border:none;border-top:1px solid #e5e7eb;margin:14px 0">
+    <p class="hint">Or load sales from your register: export <b>Item Sales</b> from Square or Clover as a CSV and pick the file.</p>
+    <input id="csvFile" type="file" accept=".csv,text/csv">
+    <span id="csvMsg" class="hint"></span>
+  </section>
+
+  <section>
+    <h2>Regulars — who gets the deal texts</h2>
+    <p class="hint">Only people who said yes to texts. Their numbers stay on this phone.</p>
+    <div class="rowline">
+      <input id="regName" placeholder="Name" style="flex:2">
+      <input id="regPhone" placeholder="Phone" inputmode="tel" style="flex:2">
+      <button id="addRegBtn" class="small">Add</button>
+    </div>
+    <div id="regularsList"></div>
+  </section>
+
+  <section>
+    <h2>This week's report</h2>
+    <p class="hint">What the markdowns actually saved, and what still went to waste. This is the number that decides the price of the app.</p>
+    <div class="cards" style="margin:0">
+      <div class="card good"><div class="big" id="repRecovered">$0</div><div class="label">Saved by markdowns (7 days)</div></div>
+      <div class="card danger"><div class="big" id="repWasted">$0</div><div class="label">Still wasted (7 days)</div></div>
+      <div class="card"><div class="big" id="repApplied">0</div><div class="label">Markdowns put up (7 days)</div></div>
+      <div class="card"><div class="big" id="repPulled">0</div><div class="label">Items pulled expired (7 days)</div></div>
+    </div>
+    <div id="reportDetail" style="margin-top:10px"></div>
+  </section>
+
+  <section>
+    <h2>Add stock that just arrived</h2>
+    <label>Barcode (scan it or type it)</label>
+    <input id="barcode" inputmode="numeric" placeholder="e.g. 036800123456" autocomplete="off">
+    <div class="rowline">
+      <button id="lookupBtn" class="secondary">Look it up</button>
+      <button id="scanBtn" class="secondary">Scan with camera</button>
+    </div>
+    <div id="camBox" style="display:none;margin-top:10px">
+      <video id="camVideo" playsinline></video><br>
+      <button id="camStop" class="secondary small">Stop camera</button>
+      <span id="camMsg" class="hint"></span>
+    </div>
+    <span id="lookupMsg" class="hint"></span>
+    <div id="receiveForm" style="display:none">
+      <label>Product</label>
+      <input id="pName" placeholder="Product name">
+      <label>How many came in</label>
+      <input id="pQty" type="number" min="1" value="12">
+      <label>Price each ($)</label>
+      <input id="pPrice" type="number" min="0" step="0.01" value="4.99">
+      <label>When did it arrive?</label>
+      <input id="pReceived" type="date">
+      <div id="expiryBox"></div>
+      <button id="addBtn">Add to the shelf</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Everything on the shelf</h2>
+    <div id="inventoryList"></div>
+    <p><button id="resetBtn" class="secondary">Reset demo data</button></p>
+  </section>
+
+  <section>
+    <h2>Store settings</h2>
+    <p id="installRow" style="display:none"><button id="installBtn">Install ChiSave on this phone</button> <span class="hint">Puts an icon on your home screen, works without internet.</span></p>
+    <label>Store name (goes on the deal texts)</label>
+    <input id="setStoreName" placeholder="e.g. Fresh Mart — 79th St">
+    <label>Text service web address (optional)</label>
+    <input id="setSmsUrl" placeholder="Leave blank until the text service is set up">
+    <p class="hint">Without a text service, deals go out from your own phone — tap a regular's name and your messaging app opens with the text ready. The service (Twilio) is for sending to everyone at once later; it needs a Twilio account, so it stays off until then.</p>
+    <button id="saveSettingsBtn">Save settings</button>
+    <span id="settingsMsg" class="hint"></span>
+    <p class="hint" style="margin-top:10px">Markdowns: 10% off at 3 days out, 25% at 2 days, 50% at 1 day. Dates that are estimates (not printed) act a day early, to be safe. A USE-BY date is a hard stop.</p>
+  </section>
+</main>
+<footer>ChiSave &middot; Expiry dates are estimates from USDA FoodKeeper data unless the package date was read. A USE-BY date is a hard stop — never sell past it.</footer>
+
+<script>
+/*__ENGINE__*/
+/*__SHELF_LIFE__*/
+</script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const STORE_KEY = "chisave.inventory.v1";
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const fmt$ = (n) => "$" + Number(n).toFixed(2);
+const fmtDate = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+/* ---------- shelf-life matching ---------- */
+const SHELF = window.__SHELF_LIFE__;
+function findShelfLife(productName, categories) {
+  const hay = ((productName || "") + " " + (categories || []).join(" ")).toLowerCase();
+  let best = null, bestScore = 0;
+  for (const p of SHELF.products) {
+    let score = 0;
+    for (const kw of p.keywords) {
+      if (kw && hay.includes(kw)) score += kw.split(" ").length > 1 ? 3 : 1;
+    }
+    if (p.name && hay.includes(p.name.toLowerCase())) score += 2;
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  if (!best || bestScore < 1) return null;
+  return best;
+}
+function needsPrintedDate(productName) {
+  const hay = (productName || "").toLowerCase();
+  return SHELF.needs_printed_date.some((n) => {
+    const base = n.split("(")[0].trim().toLowerCase();
+    return base && hay.includes(base);
+  });
+}
+function addDays(iso, days) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/* ---------- demo seed data (relative to today) ---------- */
+function demoSales(perDay, jitter) {
+  const out = [];
+  for (let i = 14; i >= 1; i--) {
+    const d = addDays(todayISO(), -i);
+    out.push({ date: d, qty: Math.max(0, Math.round(perDay + (jitter ? (i % 3) - 1 : 0))) });
+  }
+  return out;
+}
+function seed() {
+  const t = todayISO();
+  return [
+    { id: "d1", name: "Ground beef 80/20, 1 lb", barcode: "085239010019", onHand: 18, price: 5.99,
+      receivedISO: t, expiryISO: addDays(t, 1), isUseBy: true, dateSource: "estimate", sales: demoSales(3) },
+    { id: "d2", name: "Chicken thighs, 1 lb", barcode: "002270903412", onHand: 10, price: 3.49,
+      receivedISO: t, expiryISO: addDays(t, 1), isUseBy: true, dateSource: "estimate", sales: demoSales(2) },
+    { id: "d3", name: "Whole milk, 1 gallon", barcode: "070738100016", onHand: 12, price: 4.49,
+      receivedISO: addDays(t, -2), expiryISO: addDays(t, 2), isUseBy: true, dateSource: "printed", sales: demoSales(4) },
+    { id: "d4", name: "Yogurt cups, assorted", barcode: "070738350012", onHand: 20, price: 0.99,
+      receivedISO: addDays(t, -5), expiryISO: addDays(t, 2), isUseBy: false, dateSource: "estimate", sales: demoSales(3) },
+    { id: "d5", name: "Romaine lettuce", barcode: "033383655001", onHand: 14, price: 2.49,
+      receivedISO: addDays(t, -4), expiryISO: addDays(t, 3), isUseBy: false, dateSource: "estimate", sales: demoSales(2) },
+    { id: "d6", name: "Bananas, bunch", barcode: "0000000004011", onHand: 9, price: 0.69,
+      receivedISO: addDays(t, -1), expiryISO: addDays(t, 2), isUseBy: false, dateSource: "estimate", sales: demoSales(4) },
+    { id: "d7", name: "Eggs, dozen", barcode: "041130005302", onHand: 15, price: 3.99,
+      receivedISO: addDays(t, -5), expiryISO: addDays(t, 16), isUseBy: false, dateSource: "estimate", sales: demoSales(2) },
+    { id: "d8", name: "White bread loaf", barcode: "070738200012", onHand: 8, price: 2.99,
+      receivedISO: addDays(t, -10), expiryISO: addDays(t, 4), isUseBy: false, dateSource: "estimate", sales: demoSales(1) },
+    { id: "d9", name: "Sour cream, 16 oz", barcode: "070738400022", onHand: 6, price: 2.79,
+      receivedISO: addDays(t, -9), expiryISO: addDays(t, -1), isUseBy: true, dateSource: "printed", sales: demoSales(1) },
+  ];
+}
+
+/* ---------- state ---------- */
+const REG_KEY = "chisave.regulars.v1";
+const SET_KEY = "chisave.settings.v1";
+const ACT_KEY = "chisave.activity.v1";
+let inventory;
+try { inventory = JSON.parse(localStorage.getItem(STORE_KEY) || "null") || seed(); }
+catch (e) { inventory = seed(); }
+let regulars;
+try { regulars = JSON.parse(localStorage.getItem(REG_KEY) || "null") || []; }
+catch (e) { regulars = []; }
+let settings;
+try { settings = JSON.parse(localStorage.getItem(SET_KEY) || "null") || { storeName: "our store", smsUrl: "" }; }
+catch (e) { settings = { storeName: "our store", smsUrl: "" }; }
+let activity;
+try { activity = JSON.parse(localStorage.getItem(ACT_KEY) || "null") || []; }
+catch (e) { activity = []; }
+function save() { localStorage.setItem(STORE_KEY, JSON.stringify(inventory)); }
+function saveRegulars() { localStorage.setItem(REG_KEY, JSON.stringify(regulars)); }
+function saveSettings() { localStorage.setItem(SET_KEY, JSON.stringify(settings)); }
+function saveActivity() { localStorage.setItem(ACT_KEY, JSON.stringify(activity)); }
+/** Record a money event for the weekly report: {date, kind, label, amount, count}. */
+function logEvent(kind, label, amount, count) {
+  activity.push({ date: todayISO(), kind, label, amount: +amount.toFixed(2), count: count || 1 });
+  saveActivity();
+}
+
+/* ---------- render ---------- */
+function render() {
+  $("todayLine").textContent = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  document.querySelector("header h1").textContent = "ChiSave — " + (settings.storeName || "our store");
+  const rows = forecastInventory(inventory, todayISO());
+  const md = rows.filter((r) => r.forecast.status === "markdown" && !r.applied);
+  const exp = rows.filter((r) => r.forecast.status === "expired" || r.forecast.status === "useby-stop");
+  $("statRisk").textContent = fmt$(valueAtRisk(rows));
+  $("statRecover").textContent = fmt$(recoverableValue(rows.filter((r) => !r.applied)));
+  $("statMarkdown").textContent = md.length;
+  $("statExpired").textContent = exp.length;
+
+  // markdown list
+  const ml = $("markdownList");
+  if (!md.length) { ml.innerHTML = '<p class="empty">Nothing needs marking down today. Good day.</p>'; }
+  else {
+    ml.innerHTML = md.map((r) => {
+      const f = r.forecast;
+      return `<div class="item" data-id="${r.id}">
+        <div class="row"><span class="name">${r.name}</span>
+        <span class="price"><span class="old">${fmt$(r.price)}</span>${fmt$(f.markdownPrice)}</span></div>
+        <div class="meta"><span class="badge md">${f.markdownPct}% off</span>
+        ${f.predictedLeftover} left over &middot; date ${fmtDate(r.expiryISO)} (${f.daysLeft} day${f.daysLeft === 1 ? "" : "s"} left) &middot; ${r.dateSource === "estimate" ? "date is an estimate" : "package date"}</div>
+        <div class="meta">${f.reason}</div>
+        <label style="font-weight:400"><input type="checkbox" data-apply="${r.id}" style="width:auto"> Price changed at the register</label>
+      </div>`;
+    }).join("");
+  }
+  ml.querySelectorAll("[data-apply]").forEach((cb) => cb.addEventListener("change", () => {
+    const item = inventory.find((x) => x.id === cb.getAttribute("data-apply"));
+    if (!item) return;
+    if (cb.checked) {
+      const f = forecastItem(item, todayISO());
+      // What this markdown saves: the units that would have been left over,
+      // sold at the markdown price instead of thrown away.
+      if (f.status === "markdown" && f.predictedLeftover > 0) {
+        logEvent("recovered", `${item.name} — ${f.markdownPct}% off`, f.predictedLeftover * f.markdownPrice, Math.ceil(f.predictedLeftover));
+      }
+      item.applied = true;
+      item.appliedDate = todayISO();
+    } else {
+      item.applied = false;
+    }
+    save(); render();
+  }));
+
+  // deal text
+  const dealLines = md.map((r) =>
+    `${r.name} ${r.forecast.markdownPct}% off (was ${fmt$(r.price)}, now ${fmt$(r.forecast.markdownPrice)})`);
+  const dealText = dealLines.length
+    ? `Today only at ${settings.storeName || "our store"} — fresh food, marked down before its date:\n` + dealLines.map((l) => "• " + l).join("\n") + "\nWhile it lasts, today only."
+    : "No deals today — everything is selling through fine.";
+  $("dealText").value = dealText;
+
+  // tap-to-text buttons
+  const tb = $("textButtons");
+  if (!dealLines.length || !regulars.length) {
+    tb.innerHTML = regulars.length ? "" : '<p class="hint">Add regulars below to text them the deal.</p>';
+  } else {
+    tb.innerHTML = "<p class='hint'>Tap a regular to text them:</p>" + regulars.map((reg, i) =>
+      `<a href="sms:${encodeURIComponent(reg.phone)}?&body=${encodeURIComponent(dealText)}" style="text-decoration:none"><button class="secondary small" style="margin:0 6px 6px 0">Text ${reg.name}</button></a>`).join("")
+      + (settings.smsUrl ? `<button class="small" id="sendAllBtn">Send to all by text service</button>` : "");
+    const sendAll = $("sendAllBtn");
+    if (sendAll) sendAll.addEventListener("click", sendAllByService);
+  }
+
+  // sales log
+  const sl = $("salesLog");
+  sl.innerHTML = inventory.map((item) => {
+    const todaySale = (item.sales || []).find((s) => s.date === todayISO());
+    return `<div class="rowline"><span style="flex:1">${item.name} <span class="hint">(${item.onHand} left)</span></span>
+      <input class="qty" type="number" min="0" value="${todaySale ? todaySale.qty : 0}" data-sale="${item.id}"></div>`;
+  }).join("");
+
+  // regulars list
+  const rl = $("regularsList");
+  rl.innerHTML = regulars.length ? regulars.map((reg, i) =>
+    `<div class="rowline"><span style="flex:1">${reg.name} — ${reg.phone}</span>
+    <button class="secondary small" data-del-reg="${i}">Remove</button></div>`).join("")
+    : '<p class="empty">No regulars yet.</p>';
+  rl.querySelectorAll("[data-del-reg]").forEach((b) => b.addEventListener("click", () => {
+    regulars.splice(+b.getAttribute("data-del-reg"), 1); saveRegulars(); render();
+  }));
+
+  // weekly report (last 7 days, including today)
+  const since = addDays(todayISO(), -6);
+  const week = activity.filter((a) => a.date >= since);
+  const recovered = week.filter((a) => a.kind === "recovered").reduce((s, a) => s + a.amount, 0);
+  const wasted = week.filter((a) => a.kind === "wasted").reduce((s, a) => s + a.amount, 0);
+  const appliedCount = week.filter((a) => a.kind === "recovered").length;
+  const pulledCount = week.filter((a) => a.kind === "wasted").reduce((s, a) => s + a.count, 0);
+  $("repRecovered").textContent = fmt$(recovered);
+  $("repWasted").textContent = fmt$(wasted);
+  $("repApplied").textContent = appliedCount;
+  $("repPulled").textContent = pulledCount;
+  const det = $("reportDetail");
+  if (!week.length) {
+    det.innerHTML = '<p class="empty">Nothing recorded yet this week. Tick a markdown as applied, or pull an expired item, and it shows up here.</p>';
+  } else {
+    det.innerHTML = week.slice().reverse().map((a) =>
+      `<div class="meta">${a.date} — ${a.label}: <b>${a.kind === "recovered" ? "saved " : "lost "}${fmt$(a.amount)}</b></div>`).join("");
+  }
+
+  // inventory
+  const il = $("inventoryList");
+  il.innerHTML = rows.map((r) => {
+    const f = r.forecast;
+    const badge = f.status === "markdown" ? `<span class="badge md">${f.markdownPct}% off</span>`
+      : (f.status === "expired" || f.status === "useby-stop") ? `<span class="badge exp">Pull it</span>`
+      : `<span class="badge ok">Selling fine</span>`;
+    const src = r.dateSource === "estimate" ? `<span class="badge est">Estimate</span>` : `<span class="badge printed">Package date</span>`;
+    const pullBtn = (f.status === "expired" || f.status === "useby-stop")
+      ? ` <button class="secondary small" data-pull="${r.id}">Pulled — record waste</button>` : "";
+    const photo = r.datePhoto ? `<img class="thumb" src="${r.datePhoto}" alt="photo of the printed date">` : "";
+    return `<div class="item ${r.applied ? "applied" : ""}">
+      <div class="row"><span class="name">${r.name}</span><span class="price">${fmt$(r.price)}</span></div>
+      <div class="meta">${badge} ${src} &middot; ${r.onHand} on hand &middot; date ${fmtDate(r.expiryISO)}${r.isUseBy ? " (USE-BY)" : ""}${pullBtn}</div>
+      <div class="meta">${f.reason}</div>${photo}
+    </div>`;
+  }).join("");
+  il.querySelectorAll("[data-pull]").forEach((b) => b.addEventListener("click", () => {
+    const item = inventory.find((x) => x.id === b.getAttribute("data-pull"));
+    if (!item) return;
+    if (!confirm(`Pull ${item.name}? ${item.onHand} left, worth ${fmt$(item.onHand * item.price)}, will be recorded as waste.`)) return;
+    logEvent("wasted", `${item.name} — pulled expired`, item.onHand * item.price, item.onHand);
+    inventory = inventory.filter((x) => x.id !== item.id);
+    save(); render();
+  }));
+}
+
+/* ---------- receive flow ---------- */
+let pendingShelf = null;
+$("lookupBtn").addEventListener("click", async () => {
+  const code = $("barcode").value.trim().replace(/\D/g, "");
+  const msg = $("lookupMsg");
+  if (!code) { msg.textContent = "Type or scan a barcode first."; return; }
+  msg.textContent = "Looking it up…";
+  let name = "", cats = [];
+  try {
+    const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json`);
+    const data = await res.json();
+    if (data.status === 1 && data.product) {
+      name = data.product.product_name || "";
+      cats = data.product.categories_tags || [];
+      msg.textContent = name ? `Found: ${name}` : "Found the barcode, but no name — type it below.";
+    } else { msg.textContent = "Not in the free food database — type the name below."; }
+  } catch (e) { msg.textContent = "No internet for the lookup — type the name below."; }
+  $("pName").value = name;
+  $("pReceived").value = todayISO();
+  pendingShelf = findShelfLife(name, cats);
+  const needsPrinted = needsPrintedDate(name);
+  const box = $("expiryBox");
+  if (needsPrinted) {
+    box.innerHTML = `<p class="hint"><b>This food needs its printed date.</b> The USDA table says to follow the package date for it — point the camera at the date on the package, or type the date below.</p>
+      <label>Photo the printed date</label>
+      <input id="pDatePhoto" type="file" accept="image/*" capture="environment">
+      <button id="ocrBtn" class="secondary small" type="button">Read the date from the photo</button>
+      <span id="ocrMsg" class="hint"></span>
+      <label>Printed date on the package</label><input id="pExpiry" type="date">`;
+    pendingShelf = null;
+    $("ocrBtn").addEventListener("click", readDateFromPhoto);
+  } else if (pendingShelf) {
+    const exp = addDays(todayISO(), pendingShelf.min_days);
+    box.innerHTML = `<p class="hint">Shelf life from USDA data: <b>${pendingShelf.min_days}–${pendingShelf.max_days} days</b> (${pendingShelf.storage}). Using the careful end: <b>good until ${fmtDate(exp)}</b>. This is an estimate, not the printed date.</p>
+      <input id="pExpiry" type="date" value="${exp}" style="display:none">`;
+  } else {
+    box.innerHTML = `<p class="hint">No shelf-life match for this item. Using a careful default of <b>5 days</b> — fix the date below if you know it.</p>
+      <label>Date it goes bad</label><input id="pExpiry" type="date" value="${addDays(todayISO(), 5)}">`;
+  }
+  $("receiveForm").style.display = "block";
+});
+
+$("addBtn").addEventListener("click", () => {
+  const name = $("pName").value.trim();
+  const qty = parseInt($("pQty").value, 10) || 1;
+  const price = parseFloat($("pPrice").value) || 0;
+  const received = $("pReceived").value || todayISO();
+  const expiry = ($("pExpiry") && $("pExpiry").value) || addDays(received, 5);
+  if (!name) { alert("Add the product name first."); return; }
+  const isPrinted = !pendingShelf;
+  const item = {
+    id: "i" + Date.now(), name, barcode: $("barcode").value.trim(),
+    onHand: qty, price, receivedISO: received, expiryISO: expiry,
+    isUseBy: false, dateSource: isPrinted ? "printed" : "estimate",
+    sales: demoSales(1),
+  };
+  if (pendingDatePhoto) item.datePhoto = pendingDatePhoto;
+  inventory.push(item);
+  pendingDatePhoto = null;
+  save();
+  $("receiveForm").style.display = "none";
+  $("barcode").value = "";
+  $("lookupMsg").textContent = `${name} added — good until ${fmtDate(expiry)}.`;
+  render();
+});
+
+$("copyDeal").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("dealText").value); $("copyDeal").textContent = "Copied!"; setTimeout(() => { $("copyDeal").textContent = "Copy deal text"; }, 1500); }
+  catch (e) { $("dealText").select(); document.execCommand("copy"); }
+});
+
+$("resetBtn").addEventListener("click", () => {
+  if (confirm("Reset the demo back to the starting stock?")) {
+    inventory = seed(); save(); render();
+  }
+});
+
+/* ---------- sales log + CSV import ---------- */
+$("saveSalesBtn").addEventListener("click", () => {
+  const today = todayISO();
+  let changed = 0;
+  document.querySelectorAll("[data-sale]").forEach((input) => {
+    const item = inventory.find((x) => x.id === input.getAttribute("data-sale"));
+    if (!item) return;
+    const qty = Math.max(0, parseInt(input.value, 10) || 0);
+    item.sales = (item.sales || []).filter((s) => s.date !== today);
+    if (qty > 0) item.sales.push({ date: today, qty });
+    item.onHand = Math.max(0, item.onHand - qty);
+    changed++;
+  });
+  save(); render();
+  $("salesMsg").textContent = `Saved sales for ${changed} items.`;
+});
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [], cur = "", inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ",") { row.push(cur); cur = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (cur !== "" || row.length) { row.push(cur); rows.push(row); row = []; cur = ""; }
+      if (c === "\r" && text[i + 1] === "\n") i++;
+    } else cur += c;
+  }
+  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter((r) => r.some((c) => String(c).trim() !== ""));
+}
+$("csvFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  const rows = parseCSV(text);
+  if (rows.length < 2) { $("csvMsg").textContent = "That file looks empty."; return; }
+  const header = rows[0].map((h) => String(h).toLowerCase());
+  const nameIdx = header.findIndex((h) => /item|product|name|description/.test(h));
+  const qtyIdx = header.findIndex((h) => /qty|quantity|sold|count/.test(h));
+  const dateIdx = header.findIndex((h) => /date/.test(h));
+  if (nameIdx < 0 || qtyIdx < 0) {
+    $("csvMsg").textContent = "Couldn't find the item and quantity columns. Export 'Item Sales' from Square or Clover.";
+    return;
+  }
+  let matched = 0, added = 0;
+  for (const row of rows.slice(1)) {
+    const name = String(row[nameIdx] || "").trim();
+    const qty = parseInt(String(row[qtyIdx]).replace(/[^0-9]/g, ""), 10) || 0;
+    if (!name || qty <= 0) continue;
+    const item = inventory.find((x) => x.name.toLowerCase().includes(name.toLowerCase())
+      || name.toLowerCase().includes(x.name.toLowerCase().split(",")[0]));
+    if (!item) continue;
+    matched++;
+    let date = todayISO();
+    if (dateIdx >= 0) {
+      const d = new Date(String(row[dateIdx]));
+      if (!isNaN(d)) date = d.toISOString().slice(0, 10);
+    }
+    item.sales = (item.sales || []).filter((s) => s.date !== date);
+    item.sales.push({ date, qty });
+    added += qty;
+  }
+  save(); render();
+  $("csvMsg").textContent = `Imported ${matched} item(s), ${added} units sold.`;
+});
+
+/* ---------- regulars ---------- */
+$("addRegBtn").addEventListener("click", () => {
+  const name = $("regName").value.trim();
+  const phone = $("regPhone").value.trim().replace(/[^\d+]/g, "");
+  if (!name || !phone) { alert("Add a name and a phone number."); return; }
+  regulars.push({ name, phone });
+  saveRegulars();
+  $("regName").value = ""; $("regPhone").value = "";
+  render();
+});
+
+/* ---------- settings ---------- */
+$("setStoreName").value = settings.storeName || "";
+$("setSmsUrl").value = settings.smsUrl || "";
+$("saveSettingsBtn").addEventListener("click", () => {
+  settings.storeName = $("setStoreName").value.trim() || "our store";
+  settings.smsUrl = $("setSmsUrl").value.trim();
+  saveSettings(); render();
+  $("settingsMsg").textContent = "Saved.";
+});
+
+/* ---------- send by text service (Twilio worker, when set up) ---------- */
+async function sendAllByService() {
+  const text = $("dealText").value;
+  if (!regulars.length) { alert("No regulars to text."); return; }
+  if (!settings.smsUrl) { alert("No text service set up yet — tap a regular's name instead."); return; }
+  let ok = 0, fail = 0;
+  for (const reg of regulars) {
+    try {
+      const res = await fetch(settings.smsUrl, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: reg.phone, body: text }),
+      });
+      if (res.ok) ok++; else fail++;
+    } catch (e) { fail++; }
+  }
+  alert(`Text service: ${ok} sent, ${fail} failed.`);
+}
+
+/* ---------- camera barcode scan ---------- */
+let camStream = null, camRaf = null;
+$("scanBtn").addEventListener("click", async () => {
+  if (!("BarcodeDetector" in window)) {
+    alert("This phone's browser can't scan barcodes — type the number instead.");
+    return;
+  }
+  $("camBox").style.display = "block";
+  $("camMsg").textContent = "Point the camera at a barcode…";
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+  } catch (e) { $("camMsg").textContent = "Camera blocked — allow it and try again."; return; }
+  const video = $("camVideo");
+  video.srcObject = camStream;
+  await video.play();
+  const detector = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"] });
+  const tick = async () => {
+    try {
+      const codes = await detector.detect(video);
+      if (codes.length) {
+        $("barcode").value = codes[0].rawValue;
+        stopCamera();
+        $("lookupBtn").click();
+        return;
+      }
+    } catch (e) { /* keep scanning */ }
+    camRaf = requestAnimationFrame(tick);
+  };
+  tick();
+});
+function stopCamera() {
+  if (camRaf) cancelAnimationFrame(camRaf);
+  if (camStream) camStream.getTracks().forEach((t) => t.stop());
+  camStream = null;
+  $("camBox").style.display = "none";
+}
+$("camStop").addEventListener("click", stopCamera);
+
+/* ---------- read the printed date from a photo (OCR, best effort) ---------- */
+let pendingDatePhoto = null;
+async function readDateFromPhoto() {
+  const file = $("pDatePhoto") && $("pDatePhoto").files[0];
+  const msg = $("ocrMsg");
+  if (!file) { msg.textContent = "Take a photo of the date first."; return; }
+  // Keep a small copy of the photo on the item, as proof of the date.
+  pendingDatePhoto = await downscalePhoto(file, 480);
+  msg.textContent = "Reading the date…";
+  try {
+    if (!window.Tesseract) {
+      await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js");
+    }
+    const { data: { text } } = await window.Tesseract.recognize(file, "eng");
+    const found = parsePrintedDate(text);
+    if (found) {
+      $("pExpiry").value = found;
+      msg.textContent = `Read "${text.replace(/\s+/g, " ").trim().slice(0, 60)}" — date set to ${found}. Check it before saving.`;
+    } else {
+      msg.textContent = "Couldn't read a date from the photo — type it in below.";
+    }
+  } catch (e) {
+    msg.textContent = "Date reading needs internet the first time — type the date in below.";
+  }
+}
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+/** Find a date in OCR text: 11/25/2026, 11-25-26, NOV 25 2026, 25 NOV 26… */
+function parsePrintedDate(text) {
+  const months = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  let m = text.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if (m) {
+    let [, a, b, y] = m;
+    y = +y < 100 ? 2000 + +y : +y;
+    const d = new Date(Date.UTC(y, +a - 1, +b));
+    if (!isNaN(d)) return d.toISOString().slice(0, 10);
+  }
+  m = text.toLowerCase().match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,)?\s+(\d{2,4})/);
+  if (m) {
+    const y = +m[3] < 100 ? 2000 + +m[3] : +m[3];
+    const d = new Date(Date.UTC(y, months[m[1]] - 1, +m[2]));
+    if (!isNaN(d)) return d.toISOString().slice(0, 10);
+  }
+  return null;
+}
+function downscalePhoto(file, maxPx) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = () => resolve(null);
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/* ---------- install as an app (PWA) ---------- */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {
+      // No service worker on plain file opens or old browsers — the app
+      // still works, it just can't install or work offline there.
+    });
+  });
+}
+let deferredInstall = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstall = e;
+  $("installRow").style.display = "block";
+});
+$("installBtn").addEventListener("click", async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  await deferredInstall.userChoice;
+  deferredInstall = null;
+  $("installRow").style.display = "none";
+});
+
+render();
+</script>
+</body>
+</html>
