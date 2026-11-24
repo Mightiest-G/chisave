@@ -49,15 +49,41 @@ instead of thrown away.
   excepted), but the app never pushes food past a safety date or food that
   is actually spoiled.
 
-## What v1 does NOT have yet
+## What v2 adds (2026-11-24)
 
-- **Square/Clover live link** — sales come in by CSV export or by hand each
-  evening. A live Square connection needs the store's Square account
-  (OAuth) — the CSV path is the pilot route.
-- **Bulk text sending** — deals go out one tap at a time from the clerk's
-  own phone (free). `server/twilio-send.js` is the ready-to-deploy worker
-  for sending to everyone at once; it needs a Twilio account (~$1.15/mo
-  for a number, ~$0.008 per text) and the URL pasted in Settings.
+- **Markdowns that learn** — the app remembers what each product did last
+  time it was marked down. Marked down and still wasted? Next time it
+  starts one rung deeper. Cleared easily at 10%? Next time it starts
+  gentler. Only cleared at 50%? Starts deeper. The reason on the markdown
+  list says so in plain words. Learning lives on the phone
+  (`chisave.learning.v1`).
+- **Order less / order more** — in the weekly report, from the last 30 days
+  of real history: a product is "order less" when at least 4 came in and a
+  quarter or more went to waste; "order more" when it sold out before its
+  date at least twice.
+- **Scan in a whole delivery** — keep the camera open and scan case after
+  case; each scan looks the product up, sets its date, and adds it
+  (scanning the same thing twice just adds more). A typed barcode works
+  the same way when there is no camera.
+- **Square register link (built, needs a store to switch on)** — one
+  sign-in in Settings, then "Sync sales from Square" pulls the last 2
+  days of orders into the sales log on its own. Needs the helper worker
+  (`server/square-oauth.js`, Cloudflare) + a Square developer app for the
+  OAuth client ID/secret. The token lives on the store's phone only.
+- **Send to all by text service** — one tap sends today's deals to every
+  regular. The worker (`server/twilio-send.js`) now takes the whole list
+  in one call and falls back to one call each if it is the old version.
+  Still needs a Twilio account (~$1.15/mo for a number, ~$0.008/text).
+  Fully automatic 9am sending is NOT built — it needs the regulars list
+  on a server, a step after the pilot.
+- **Printable shelf labels** — "Print shelf labels" on the markdown list
+  prints one label per item (was → now, % off, "today only").
+
+## What v2 does NOT have yet
+
+- **Live Square/Twilio connections** — both are built and tested against
+  fake data, but no real Square or Twilio account has been connected, so
+  no live API call has ever run.
 - **Camera date reading** — the photo + OCR path exists (Tesseract.js,
   best effort, clerk always confirms). It is a backup: most items never
   need it, because the USDA estimate covers them.
@@ -76,7 +102,8 @@ instead of thrown away.
 - `data/` — `foodkeeper-661.json` (USDA FoodKeeper, public domain, CC0) and
   the build script. The official feed is
   https://www.fsis.usda.gov/shared/data/EN/foodkeeper.json
-- `server/` — `twilio-send.js`, the optional bulk-text worker (see header).
+- `server/` — `twilio-send.js` (bulk-text worker) and `square-oauth.js`
+  (Square register-link helper), both optional; see their headers.
 
 ## Run it / install it
 

@@ -104,6 +104,72 @@ test("past USE-BY date is a hard stop", () => {
   assert.equal(f.markdownPct, 0);
 });
 
+test("learning: wasted last time starts one rung deeper", () => {
+  // 2 days out is normally 25%; after a wasted markdown it starts at 50%.
+  const f = forecastItem({
+    onHand: 20, price: 4.00, expiryISO: "2026-11-25",
+    isUseBy: false, dateSource: "printed", sales: sales(2),
+  }, TODAY, { lastPct: 25, lastOutcome: "wasted" });
+  assert.equal(f.markdownPct, 50);
+  assert.equal(f.learned, true);
+  assert.match(f.reason, /didn't clear/);
+});
+
+test("learning: cleared easily at 10% starts one rung gentler", () => {
+  const f = forecastItem({
+    onHand: 20, price: 4.00, expiryISO: "2026-11-25",
+    isUseBy: false, dateSource: "printed", sales: sales(2),
+  }, TODAY, { lastPct: 10, lastOutcome: "cleared" });
+  assert.equal(f.markdownPct, 10);
+  assert.equal(f.learned, true);
+});
+
+test("learning: only cleared at 50% starts deeper", () => {
+  const f = forecastItem({
+    onHand: 20, price: 4.00, expiryISO: "2026-11-25",
+    isUseBy: false, dateSource: "printed", sales: sales(2),
+  }, TODAY, { lastPct: 50, lastOutcome: "cleared" });
+  assert.equal(f.markdownPct, 50);
+});
+
+test("learning: cleared at 25% keeps the standard ladder", () => {
+  const f = forecastItem({
+    onHand: 20, price: 4.00, expiryISO: "2026-11-25",
+    isUseBy: false, dateSource: "printed", sales: sales(2),
+  }, TODAY, { lastPct: 25, lastOutcome: "cleared" });
+  assert.equal(f.markdownPct, 25);
+  assert.equal(f.learned, false);
+});
+
+test("learning: shift never goes past the ends of the ladder", () => {
+  // 1 day out is already 50%; a wasted history can't push it past 50%.
+  const deep = forecastItem({
+    onHand: 10, price: 5.00, expiryISO: "2026-11-24",
+    isUseBy: false, dateSource: "printed", sales: sales(2),
+  }, TODAY, { lastPct: 50, lastOutcome: "wasted" });
+  assert.equal(deep.markdownPct, 50);
+  // 3 days out is 10%; an easy clear can't push it below 10%.
+  const shallow = forecastItem({
+    onHand: 30, price: 3.00, expiryISO: "2026-11-26",
+    isUseBy: false, dateSource: "printed", sales: sales(2),
+  }, TODAY, { lastPct: 10, lastOutcome: "cleared" });
+  assert.equal(shallow.markdownPct, 10);
+});
+
+test("learning: forecastInventory applies per-product learning", () => {
+  const rows = forecastInventory([
+    { name: "waster", onHand: 20, price: 4, expiryISO: "2026-11-25",
+      isUseBy: false, dateSource: "printed", sales: sales(2) },
+    { name: "easy", onHand: 20, price: 4, expiryISO: "2026-11-25",
+      isUseBy: false, dateSource: "printed", sales: sales(2) },
+  ], TODAY, {
+    waster: { lastPct: 25, lastOutcome: "wasted" },
+    easy: { lastPct: 10, lastOutcome: "cleared" },
+  });
+  assert.equal(rows.find((r) => r.name === "waster").forecast.markdownPct, 50);
+  assert.equal(rows.find((r) => r.name === "easy").forecast.markdownPct, 10);
+});
+
 test("inventory sorts markdowns first, value math adds up", () => {
   const rows = forecastInventory([
     { name: "fast", onHand: 10, price: 4, expiryISO: "2026-11-25",

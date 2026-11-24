@@ -18,6 +18,29 @@ export const MARKDOWN_LADDER = [
   { daysLeft: 1, pct: 50 },
 ];
 
+/** Normalise a product name for matching learning records and sales. */
+export function normName(name) {
+  return String(name || "").toLowerCase().split(",")[0].trim();
+}
+
+/**
+ * How the ladder shifts from what this product did last time.
+ * learning: { lastPct, lastOutcome } where lastOutcome is
+ *   'wasted'  — it was marked down and still had stock at its date
+ *   'cleared' — it sold out after a markdown
+ *   'held'    — it sold out with no markdown at all
+ * Returns a rung shift: +1 = start one rung deeper, -1 = one rung gentler.
+ */
+export function learnShift(learning) {
+  if (!learning) return 0;
+  if (learning.lastOutcome === "wasted") return 1;
+  if (learning.lastOutcome === "cleared") {
+    if (learning.lastPct >= 50) return 1; // only cleared at the deepest cut
+    if (learning.lastPct <= 10) return -1; // cleared easily at the shallow cut
+  }
+  return 0;
+}
+
 /** Days between two ISO dates (b - a). */
 export function daysBetween(aISO, bISO) {
   const ms = Date.parse(bISO + "T00:00:00Z") - Date.parse(aISO + "T00:00:00Z");
@@ -49,11 +72,12 @@ export function velocity(sales, windowDays = 14, todayISO) {
 /**
  * One item's forecast.
  * item: { onHand, price, expiryISO, isUseBy, dateSource: 'printed'|'estimate'|'supplier', sales }
+ * learning: { lastPct, lastOutcome } for this product, or null.
  * Returns { status, daysLeft, effectiveDaysLeft, predictedLeftover, markdownPct,
- *           markdownPrice, reason }.
+ *           markdownPrice, reason, learned }.
  * status: 'ok' | 'markdown' | 'expired' | 'useby-stop'
  */
-export function forecastItem(item, todayISO) {
+export function forecastItem(item, todayISO, learning) {
   const rawDays = daysBetween(todayISO, item.expiryISO);
   // Estimates lose a day: the date itself is uncertain, so act early.
   const margin = item.dateSource === "estimate" ? 1 : 0;
@@ -85,23 +109,41 @@ export function forecastItem(item, todayISO) {
   }
 
   // Tightest rung that still covers the days left: 2 days out is the 25%
-  // rung, not the 10% rung (which is for 3 days out).
-  const rung = MARKDOWN_LADDER.filter((r) => daysLeft <= r.daysLeft).pop()
-    || MARKDOWN_LADDER[MARKDOWN_LADDER.length - 1];
-  const pct = rung.pct;
+  // rung, not the 10% rung (which is for 3 days out). Then shift it from
+  // what this product did last time (see learnShift).
+  let baseIdx = MARKDOWN_LADDER.length - 1;
+  for (let i = 0; i < MARKDOWN_LADDER.length; i++) {
+    if (MARKDOWN_LADDER[i].daysLeft >= daysLeft) baseIdx = i;
+  }
+  const shift = learnShift(learning);
+  const idx = Math.min(MARKDOWN_LADDER.length - 1, Math.max(0, baseIdx + shift));
+  const pct = MARKDOWN_LADDER[idx].pct;
+  let reason = `About ${Math.ceil(predictedLeftover)} unit(s) will be left over. `
+    + `${pct}% off clears more of it before the date.`;
+  if (shift > 0) {
+    reason += learning.lastOutcome === "wasted"
+      ? ` Last time this was marked down and still didn't clear, so starting deeper.`
+      : ` Last time this only cleared at ${learning.lastPct}% off, so starting deeper.`;
+  } else if (shift < 0) {
+    reason += ` Last time this cleared at ${learning.lastPct}% off, so starting gentler.`;
+  }
   return {
     status: "markdown", daysLeft: rawDays, effectiveDaysLeft: daysLeft,
     predictedLeftover, markdownPct: pct,
     markdownPrice: +(item.price * (1 - pct / 100)).toFixed(2),
-    reason: `About ${Math.ceil(predictedLeftover)} unit(s) will be left over. `
-      + `${pct}% off clears more of it before the date.`,
+    reason, learned: shift !== 0,
   };
 }
 
-/** Run the forecast over a whole inventory. Returns items sorted: markdowns first. */
-export function forecastInventory(items, todayISO) {
+/** Run the forecast over a whole inventory. Returns items sorted: markdowns first.
+ * learningMap is { normName: { lastPct, lastOutcome } }, or null. */
+export function forecastInventory(items, todayISO, learningMap) {
   return items
-    .map((item) => ({ ...item, forecast: forecastItem(item, todayISO) }))
+    .map((item) => ({
+      ...item,
+      forecast: forecastItem(item, todayISO,
+        learningMap ? learningMap[normName(item.name)] || null : null),
+    }))
     .sort((a, b) => {
       const rank = (s) => ({ markdown: 0, expired: 1, "useby-stop": 1, ok: 2 })[s];
       return rank(a.forecast.status) - rank(b.forecast.status)

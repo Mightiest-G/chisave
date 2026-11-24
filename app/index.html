@@ -53,6 +53,16 @@
   .qty { width: 70px; flex: none; text-align: center; }
   #camBox video { width: 100%; border-radius: 10px; background: #000; }
   .thumb { max-width: 120px; border-radius: 8px; margin-top: 6px; display: block; }
+  #labelsPrint { display: none; }
+  @media print {
+    body * { visibility: hidden; }
+    #labelsPrint, #labelsPrint * { visibility: visible; }
+    #labelsPrint { display: block; position: absolute; left: 0; top: 0; width: 100%; }
+    .label-card { border: 2px dashed #14532d; border-radius: 10px; padding: 14px; margin: 0 0 12px; page-break-inside: avoid; }
+    .label-card .name { font-size: 20px; font-weight: 700; }
+    .label-card .price { font-size: 18px; margin-top: 4px; }
+    .label-card .tag { font-size: 14px; font-weight: 700; color: #14532d; }
+  }
   footer { text-align: center; color: #5a6b60; font-size: 12px; padding: 16px; }
 </style>
 </head>
@@ -74,6 +84,7 @@
     <h2>Today's markdown list</h2>
     <p class="hint">These items won't sell out before their date. Mark them down now, while they can still sell. Tick the box once you've changed the price at the register.</p>
     <div id="markdownList"></div>
+    <p><button id="printLabelsBtn" class="secondary small">Print shelf labels</button></p>
   </section>
 
   <section>
@@ -117,6 +128,7 @@
       <div class="card"><div class="big" id="repPulled">0</div><div class="label">Items pulled expired (7 days)</div></div>
     </div>
     <div id="reportDetail" style="margin-top:10px"></div>
+    <div id="orderAdvice" style="margin-top:10px"></div>
   </section>
 
   <section>
@@ -148,6 +160,27 @@
   </section>
 
   <section>
+    <h2>Scan in a whole delivery</h2>
+    <p class="hint">Keep the camera open and scan case after case. Each scan looks the product up, sets its date, and adds it — scanning the same thing twice just adds more of it.</p>
+    <label>Items in each scan (a case)</label>
+    <input id="sessQty" type="number" min="1" value="1">
+    <div class="rowline">
+      <button id="sessStartBtn" class="secondary">Start scanning</button>
+      <button id="sessStopBtn" class="secondary" style="display:none">Done</button>
+    </div>
+    <div id="sessBox" style="display:none;margin-top:10px">
+      <video id="sessVideo" playsinline style="width:100%;border-radius:10px;background:#000"></video><br>
+      <span id="sessMsg" class="hint">Point the camera at a barcode…</span>
+    </div>
+    <p class="hint" style="margin-top:10px">No camera? Type a barcode and it goes through the same lookup:</p>
+    <div class="rowline">
+      <input id="sessCode" inputmode="numeric" placeholder="Barcode">
+      <button id="sessAddBtn" class="secondary small">Add it</button>
+    </div>
+    <div id="sessList" style="margin-top:10px"></div>
+  </section>
+
+  <section>
     <h2>Everything on the shelf</h2>
     <div id="inventoryList"></div>
     <p><button id="resetBtn" class="secondary">Reset demo data</button></p>
@@ -160,12 +193,25 @@
     <input id="setStoreName" placeholder="e.g. Fresh Mart — 79th St">
     <label>Text service web address (optional)</label>
     <input id="setSmsUrl" placeholder="Leave blank until the text service is set up">
-    <p class="hint">Without a text service, deals go out from your own phone — tap a regular's name and your messaging app opens with the text ready. The service (Twilio) is for sending to everyone at once later; it needs a Twilio account, so it stays off until then.</p>
-    <button id="saveSettingsBtn">Save settings</button>
-    <span id="settingsMsg" class="hint"></span>
+    <p class="hint">Without a text service, deals go out from your own phone — tap a regular's name and your messaging app opens with the text ready. With the service set up, "Send to all by text service" sends today's deals to every regular in one tap. It needs a Twilio account (~$1.15/mo for a number, less than a cent a text), so it stays off until then. Fully automatic 9am sending needs the regulars list on a server — that's a step after the pilot.</p>
+    <label>Square helper web address (optional)</label>
+    <input id="setSquareAuthUrl" placeholder="Leave blank until the register link is set up">
+    <p class="hint">Connecting the register needs a small helper (a Cloudflare Worker) — its web address goes here. The helper only swaps the sign-in code for a token; it never sees your sales. Without it, sales still come in from the daily log or a CSV file.</p>
+    <div id="squareBox" style="margin-top:10px">
+      <p class="hint" id="squareStatus">Register not connected.</p>
+      <div class="rowline">
+        <button id="squareConnectBtn" class="secondary small">Connect Square</button>
+        <button id="squareSyncBtn" class="small" style="display:none">Sync sales from Square</button>
+        <button id="squareDisconnectBtn" class="secondary small" style="display:none">Disconnect</button>
+      </div>
+      <span id="squareMsg" class="hint"></span>
+    </div>
+    <p style="margin-top:10px"><button id="saveSettingsBtn">Save settings</button>
+    <span id="settingsMsg" class="hint"></span></p>
     <p class="hint" style="margin-top:10px">Markdowns: 10% off at 3 days out, 25% at 2 days, 50% at 1 day. Dates that are estimates (not printed) act a day early, to be safe. A USE-BY date is a hard stop.</p>
   </section>
 </main>
+<div id="labelsPrint"></div>
 <footer>ChiSave &middot; Expiry dates are estimates from USDA FoodKeeper data unless the package date was read. A USE-BY date is a hard stop — never sell past it.</footer>
 
 <script>
@@ -188,6 +234,29 @@ const MARKDOWN_LADDER = [
   { daysLeft: 2, pct: 25 },
   { daysLeft: 1, pct: 50 },
 ];
+
+/** Normalise a product name for matching learning records and sales. */
+function normName(name) {
+  return String(name || "").toLowerCase().split(",")[0].trim();
+}
+
+/**
+ * How the ladder shifts from what this product did last time.
+ * learning: { lastPct, lastOutcome } where lastOutcome is
+ *   'wasted'  — it was marked down and still had stock at its date
+ *   'cleared' — it sold out after a markdown
+ *   'held'    — it sold out with no markdown at all
+ * Returns a rung shift: +1 = start one rung deeper, -1 = one rung gentler.
+ */
+function learnShift(learning) {
+  if (!learning) return 0;
+  if (learning.lastOutcome === "wasted") return 1;
+  if (learning.lastOutcome === "cleared") {
+    if (learning.lastPct >= 50) return 1; // only cleared at the deepest cut
+    if (learning.lastPct <= 10) return -1; // cleared easily at the shallow cut
+  }
+  return 0;
+}
 
 /** Days between two ISO dates (b - a). */
 function daysBetween(aISO, bISO) {
@@ -220,11 +289,12 @@ function velocity(sales, windowDays = 14, todayISO) {
 /**
  * One item's forecast.
  * item: { onHand, price, expiryISO, isUseBy, dateSource: 'printed'|'estimate'|'supplier', sales }
+ * learning: { lastPct, lastOutcome } for this product, or null.
  * Returns { status, daysLeft, effectiveDaysLeft, predictedLeftover, markdownPct,
- *           markdownPrice, reason }.
+ *           markdownPrice, reason, learned }.
  * status: 'ok' | 'markdown' | 'expired' | 'useby-stop'
  */
-function forecastItem(item, todayISO) {
+function forecastItem(item, todayISO, learning) {
   const rawDays = daysBetween(todayISO, item.expiryISO);
   // Estimates lose a day: the date itself is uncertain, so act early.
   const margin = item.dateSource === "estimate" ? 1 : 0;
@@ -256,23 +326,41 @@ function forecastItem(item, todayISO) {
   }
 
   // Tightest rung that still covers the days left: 2 days out is the 25%
-  // rung, not the 10% rung (which is for 3 days out).
-  const rung = MARKDOWN_LADDER.filter((r) => daysLeft <= r.daysLeft).pop()
-    || MARKDOWN_LADDER[MARKDOWN_LADDER.length - 1];
-  const pct = rung.pct;
+  // rung, not the 10% rung (which is for 3 days out). Then shift it from
+  // what this product did last time (see learnShift).
+  let baseIdx = MARKDOWN_LADDER.length - 1;
+  for (let i = 0; i < MARKDOWN_LADDER.length; i++) {
+    if (MARKDOWN_LADDER[i].daysLeft >= daysLeft) baseIdx = i;
+  }
+  const shift = learnShift(learning);
+  const idx = Math.min(MARKDOWN_LADDER.length - 1, Math.max(0, baseIdx + shift));
+  const pct = MARKDOWN_LADDER[idx].pct;
+  let reason = `About ${Math.ceil(predictedLeftover)} unit(s) will be left over. `
+    + `${pct}% off clears more of it before the date.`;
+  if (shift > 0) {
+    reason += learning.lastOutcome === "wasted"
+      ? ` Last time this was marked down and still didn't clear, so starting deeper.`
+      : ` Last time this only cleared at ${learning.lastPct}% off, so starting deeper.`;
+  } else if (shift < 0) {
+    reason += ` Last time this cleared at ${learning.lastPct}% off, so starting gentler.`;
+  }
   return {
     status: "markdown", daysLeft: rawDays, effectiveDaysLeft: daysLeft,
     predictedLeftover, markdownPct: pct,
     markdownPrice: +(item.price * (1 - pct / 100)).toFixed(2),
-    reason: `About ${Math.ceil(predictedLeftover)} unit(s) will be left over. `
-      + `${pct}% off clears more of it before the date.`,
+    reason, learned: shift !== 0,
   };
 }
 
-/** Run the forecast over a whole inventory. Returns items sorted: markdowns first. */
-function forecastInventory(items, todayISO) {
+/** Run the forecast over a whole inventory. Returns items sorted: markdowns first.
+ * learningMap is { normName: { lastPct, lastOutcome } }, or null. */
+function forecastInventory(items, todayISO, learningMap) {
   return items
-    .map((item) => ({ ...item, forecast: forecastItem(item, todayISO) }))
+    .map((item) => ({
+      ...item,
+      forecast: forecastItem(item, todayISO,
+        learningMap ? learningMap[normName(item.name)] || null : null),
+    }))
     .sort((a, b) => {
       const rank = (s) => ({ markdown: 0, expired: 1, "useby-stop": 1, ok: 2 })[s];
       return rank(a.forecast.status) - rank(b.forecast.status)
@@ -370,6 +458,8 @@ function seed() {
 const REG_KEY = "chisave.regulars.v1";
 const SET_KEY = "chisave.settings.v1";
 const ACT_KEY = "chisave.activity.v1";
+const LEARN_KEY = "chisave.learning.v1";
+const SQ_KEY = "chisave.square.v1";
 let inventory;
 try { inventory = JSON.parse(localStorage.getItem(STORE_KEY) || "null") || seed(); }
 catch (e) { inventory = seed(); }
@@ -382,7 +472,25 @@ catch (e) { settings = { storeName: "our store", smsUrl: "" }; }
 let activity;
 try { activity = JSON.parse(localStorage.getItem(ACT_KEY) || "null") || []; }
 catch (e) { activity = []; }
+/** What each product did last time it was marked down: { normName: { lastPct, lastOutcome, updated } }. */
+let learning;
+try { learning = JSON.parse(localStorage.getItem(LEARN_KEY) || "null") || {}; }
+catch (e) { learning = {}; }
+/** Square connection for the store's own register: { token, locationId, connectedAt, lastSync }. Pilot-grade storage: on this phone only. */
+let square;
+try { square = JSON.parse(localStorage.getItem(SQ_KEY) || "null") || {}; }
+catch (e) { square = {}; }
 function save() { localStorage.setItem(STORE_KEY, JSON.stringify(inventory)); }
+function saveLearning() { localStorage.setItem(LEARN_KEY, JSON.stringify(learning)); }
+function saveSquare() { localStorage.setItem(SQ_KEY, JSON.stringify(square)); }
+/** Record what happened with a markdown so the next one learns from it. */
+function recordLearning(item, outcome) {
+  if (!item) return;
+  learning[normName(item.name)] = {
+    lastPct: item.appliedPct || 0, lastOutcome: outcome, updated: todayISO(),
+  };
+  saveLearning();
+}
 function saveRegulars() { localStorage.setItem(REG_KEY, JSON.stringify(regulars)); }
 function saveSettings() { localStorage.setItem(SET_KEY, JSON.stringify(settings)); }
 function saveActivity() { localStorage.setItem(ACT_KEY, JSON.stringify(activity)); }
@@ -396,7 +504,7 @@ function logEvent(kind, label, amount, count) {
 function render() {
   $("todayLine").textContent = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   document.querySelector("header h1").textContent = "ChiSave — " + (settings.storeName || "our store");
-  const rows = forecastInventory(inventory, todayISO());
+  const rows = forecastInventory(inventory, todayISO(), learning);
   const md = rows.filter((r) => r.forecast.status === "markdown" && !r.applied);
   const exp = rows.filter((r) => r.forecast.status === "expired" || r.forecast.status === "useby-stop");
   $("statRisk").textContent = fmt$(valueAtRisk(rows));
@@ -424,13 +532,14 @@ function render() {
     const item = inventory.find((x) => x.id === cb.getAttribute("data-apply"));
     if (!item) return;
     if (cb.checked) {
-      const f = forecastItem(item, todayISO());
+      const f = forecastItem(item, todayISO(), learning[normName(item.name)] || null);
       // What this markdown saves: the units that would have been left over,
       // sold at the markdown price instead of thrown away.
       if (f.status === "markdown" && f.predictedLeftover > 0) {
         logEvent("recovered", `${item.name} — ${f.markdownPct}% off`, f.predictedLeftover * f.markdownPrice, Math.ceil(f.predictedLeftover));
       }
       item.applied = true;
+      item.appliedPct = f.markdownPct;
       item.appliedDate = todayISO();
     } else {
       item.applied = false;
@@ -495,6 +604,34 @@ function render() {
       `<div class="meta">${a.date} — ${a.label}: <b>${a.kind === "recovered" ? "saved " : "lost "}${fmt$(a.amount)}</b></div>`).join("");
   }
 
+  // "Order less / order more" — from the last 30 days of real history.
+  // Order less: at least 4 came in and a quarter or more went to waste.
+  // Order more: it sold out before its date at least twice.
+  const monthAgo = addDays(todayISO(), -29);
+  const month = activity.filter((a) => a.date >= monthAgo);
+  const byProduct = {};
+  for (const a of month) {
+    // Activity labels carry a suffix ("Name — pulled expired"); the product
+    // is the part before the dash, so received/wasted/soldout for the same
+    // product land under one key.
+    const key = normName(a.label.split(" — ")[0]);
+    byProduct[key] = byProduct[key] || { label: a.label.split(" — ")[0], received: 0, wasted: 0, soldout: 0 };
+    if (a.kind === "received") byProduct[key].received += a.count || 0;
+    if (a.kind === "wasted") byProduct[key].wasted += a.count || 0;
+    if (a.kind === "soldout") byProduct[key].soldout += a.count || 0;
+  }
+  const less = Object.values(byProduct).filter((p) => p.received >= 4 && p.wasted / p.received >= 0.25);
+  const more = Object.values(byProduct).filter((p) => p.soldout >= 2);
+  const oa = $("orderAdvice");
+  if (!less.length && !more.length) {
+    oa.innerHTML = '<p class="hint">Order advice fills in as you log sales, receive stock, and pull expired items — about a month of history is enough to trust it.</p>';
+  } else {
+    oa.innerHTML = (less.length ? `<p style="margin:6px 0 2px"><b>Order less of these</b> — a quarter or more went to waste:</p>` +
+      less.map((p) => `<div class="meta">${p.label} — wasted ${p.wasted} of ${p.received} received</div>`).join("") : "")
+      + (more.length ? `<p style="margin:6px 0 2px"><b>Order more of these</b> — sold out before the date:</p>` +
+      more.map((p) => `<div class="meta">${p.label} — sold out ${p.soldout} times</div>`).join("") : "");
+  }
+
   // inventory
   const il = $("inventoryList");
   il.innerHTML = rows.map((r) => {
@@ -517,28 +654,37 @@ function render() {
     if (!item) return;
     if (!confirm(`Pull ${item.name}? ${item.onHand} left, worth ${fmt$(item.onHand * item.price)}, will be recorded as waste.`)) return;
     logEvent("wasted", `${item.name} — pulled expired`, item.onHand * item.price, item.onHand);
+    recordLearning(item, "wasted");
     inventory = inventory.filter((x) => x.id !== item.id);
     save(); render();
   }));
 }
 
 /* ---------- receive flow ---------- */
+/** Look a barcode up in the free Open Food Facts database. */
+async function lookupBarcode(code) {
+  try {
+    const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json`);
+    const data = await res.json();
+    if (data.status === 1 && data.product) {
+      return { name: data.product.product_name || "", cats: data.product.categories_tags || [], found: true, offline: false };
+    }
+    return { name: "", cats: [], found: false, offline: false };
+  } catch (e) {
+    return { name: "", cats: [], found: false, offline: true };
+  }
+}
 let pendingShelf = null;
 $("lookupBtn").addEventListener("click", async () => {
   const code = $("barcode").value.trim().replace(/\D/g, "");
   const msg = $("lookupMsg");
   if (!code) { msg.textContent = "Type or scan a barcode first."; return; }
   msg.textContent = "Looking it up…";
-  let name = "", cats = [];
-  try {
-    const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json`);
-    const data = await res.json();
-    if (data.status === 1 && data.product) {
-      name = data.product.product_name || "";
-      cats = data.product.categories_tags || [];
-      msg.textContent = name ? `Found: ${name}` : "Found the barcode, but no name — type it below.";
-    } else { msg.textContent = "Not in the free food database — type the name below."; }
-  } catch (e) { msg.textContent = "No internet for the lookup — type the name below."; }
+  const found = await lookupBarcode(code);
+  const name = found.name, cats = found.cats;
+  msg.textContent = found.offline ? "No internet for the lookup — type the name below."
+    : !found.found ? "Not in the free food database — type the name below."
+    : name ? `Found: ${name}` : "Found the barcode, but no name — type it below.";
   $("pName").value = name;
   $("pReceived").value = todayISO();
   pendingShelf = findShelfLife(name, cats);
@@ -580,12 +726,24 @@ $("addBtn").addEventListener("click", () => {
   };
   if (pendingDatePhoto) item.datePhoto = pendingDatePhoto;
   inventory.push(item);
+  logEvent("received", name, 0, qty);
   pendingDatePhoto = null;
   save();
   $("receiveForm").style.display = "none";
   $("barcode").value = "";
   $("lookupMsg").textContent = `${name} added — good until ${fmtDate(expiry)}.`;
   render();
+});
+
+$("printLabelsBtn").addEventListener("click", () => {
+  const rows = forecastInventory(inventory, todayISO(), learning)
+    .filter((r) => r.forecast.status === "markdown" && !r.applied);
+  if (!rows.length) { alert("Nothing to mark down today — no labels to print."); return; }
+  $("labelsPrint").innerHTML = rows.map((r) =>
+    `<div class="label-card"><div class="name">${r.name}</div>
+     <div class="price"><span class="old">${fmt$(r.price)}</span> <b>${fmt$(r.forecast.markdownPrice)}</b> — ${r.forecast.markdownPct}% off</div>
+     <div class="tag">TODAY ONLY — good until ${fmtDate(r.expiryISO)}</div></div>`).join("");
+  window.print();
 });
 
 $("copyDeal").addEventListener("click", async () => {
@@ -609,7 +767,14 @@ $("saveSalesBtn").addEventListener("click", () => {
     const qty = Math.max(0, parseInt(input.value, 10) || 0);
     item.sales = (item.sales || []).filter((s) => s.date !== today);
     if (qty > 0) item.sales.push({ date: today, qty });
+    const had = item.onHand;
     item.onHand = Math.max(0, item.onHand - qty);
+    if (qty > 0 && had > 0 && item.onHand === 0) {
+      // Sold out: record what happened with any markdown, so the next
+      // markdown for this product learns from it.
+      recordLearning(item, item.applied ? "cleared" : "held");
+      logEvent("soldout", item.name, 0, 1);
+    }
     changed++;
   });
   save(); render();
@@ -653,8 +818,7 @@ $("csvFile").addEventListener("change", async (e) => {
     const name = String(row[nameIdx] || "").trim();
     const qty = parseInt(String(row[qtyIdx]).replace(/[^0-9]/g, ""), 10) || 0;
     if (!name || qty <= 0) continue;
-    const item = inventory.find((x) => x.name.toLowerCase().includes(name.toLowerCase())
-      || name.toLowerCase().includes(x.name.toLowerCase().split(",")[0]));
+    const item = matchInventory(name);
     if (!item) continue;
     matched++;
     let date = todayISO();
@@ -684,18 +848,143 @@ $("addRegBtn").addEventListener("click", () => {
 /* ---------- settings ---------- */
 $("setStoreName").value = settings.storeName || "";
 $("setSmsUrl").value = settings.smsUrl || "";
+$("setSquareAuthUrl").value = settings.squareAuthUrl || "";
 $("saveSettingsBtn").addEventListener("click", () => {
   settings.storeName = $("setStoreName").value.trim() || "our store";
   settings.smsUrl = $("setSmsUrl").value.trim();
+  settings.squareAuthUrl = $("setSquareAuthUrl").value.trim();
   saveSettings(); render();
   $("settingsMsg").textContent = "Saved.";
 });
+
+/* ---------- Square register link ---------- */
+// The store's own register: one sign-in, then sales flow in on their own.
+// The token lives on this phone only (pilot-grade — a shared backend would
+// hold it instead). The helper worker (server/square-oauth.js) only swaps
+// the sign-in code for a token; it never sees sales.
+function matchInventory(name) {
+  const n = String(name || "").toLowerCase();
+  return inventory.find((x) => x.name.toLowerCase().includes(n)
+    || n.includes(x.name.toLowerCase().split(",")[0]));
+}
+function renderSquare() {
+  const connected = !!square.token;
+  $("squareStatus").textContent = connected
+    ? `Register connected${square.lastSync ? " — last synced " + square.lastSync : ""}. Sales come in from Square when you tap Sync.`
+    : "Register not connected.";
+  $("squareConnectBtn").style.display = connected ? "none" : "inline-block";
+  $("squareSyncBtn").style.display = connected ? "inline-block" : "none";
+  $("squareDisconnectBtn").style.display = connected ? "inline-block" : "none";
+}
+// Read the token the Square helper sends back in the web address
+// (#square_token=...&square_location=...&state=...).
+(function readSquareReturn() {
+  if (!location.hash.includes("square_token=")) return;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const token = params.get("square_token");
+  const state = params.get("state");
+  const saved = sessionStorage.getItem("chisave.square.state");
+  if (state && saved && state !== saved) return; // sign-in reply we didn't start
+  if (token) {
+    square = {
+      token, locationId: params.get("square_location") || "",
+      connectedAt: todayISO(), lastSync: square.lastSync || "",
+    };
+    saveSquare();
+  }
+  history.replaceState(null, "", location.pathname + location.search);
+})();
+$("squareConnectBtn").addEventListener("click", () => {
+  const authUrl = (settings.squareAuthUrl || "").replace(/\/$/, "");
+  if (!authUrl) {
+    alert("Add the Square helper's web address in Settings first — the register link is set up once, then it just works.");
+    return;
+  }
+  const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  sessionStorage.setItem("chisave.square.state", state);
+  location.href = `${authUrl}/auth?state=${state}&return_to=${encodeURIComponent(location.origin + location.pathname)}`;
+});
+$("squareDisconnectBtn").addEventListener("click", () => {
+  if (!confirm("Disconnect the register? Sales will go back to the daily log or CSV.")) return;
+  square = {}; saveSquare(); renderSquare();
+  $("squareMsg").textContent = "Disconnected.";
+});
+/** Call Square's Orders API. Tries the register directly first (Square
+ *  allows browser calls with an OAuth token); falls back to the helper
+ *  worker as a proxy if the browser blocks it. */
+async function squareFetch(path, body) {
+  const headers = {
+    "Square-Version": "2024-12-18", "Content-Type": "application/json",
+    Authorization: "Bearer " + square.token,
+  };
+  try {
+    const res = await fetch("https://connect.squareup.com" + path,
+      { method: "POST", headers, body: JSON.stringify(body) });
+    if (res.ok) return await res.json();
+  } catch (e) { /* fall through to the helper proxy */ }
+  const proxy = (settings.squareAuthUrl || "").replace(/\/$/, "");
+  if (!proxy) throw new Error("Square request failed and no helper is set up.");
+  const res2 = await fetch(proxy + "/proxy" + path,
+    { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res2.ok) throw new Error("Square request failed: " + res2.status);
+  return await res2.json();
+}
+async function syncSquareSales() {
+  if (!square.token) return;
+  $("squareMsg").textContent = "Syncing sales from Square…";
+  try {
+    const since = new Date(Date.now() - 2 * 86400000).toISOString();
+    const data = await squareFetch("/v2/orders/search", {
+      location_ids: [square.locationId],
+      query: { filter: { date_time_filter: { created_at: { start_at: since } } } },
+    });
+    let matched = 0, units = 0, unknown = 0;
+    for (const order of data.orders || []) {
+      const date = (order.created_at || "").slice(0, 10) || todayISO();
+      for (const li of order.line_items || []) {
+        const qty = parseInt(li.quantity, 10) || 0;
+        if (qty <= 0) continue;
+        const item = matchInventory(li.name || "");
+        if (!item) { unknown++; continue; }
+        matched++; units += qty;
+        item.sales = (item.sales || []).filter((s) => s.date !== date);
+        item.sales.push({ date, qty });
+        const had = item.onHand;
+        item.onHand = Math.max(0, item.onHand - qty);
+        if (had > 0 && item.onHand === 0) {
+          recordLearning(item, item.applied ? "cleared" : "held");
+          logEvent("soldout", item.name, 0, 1);
+        }
+      }
+    }
+    square.lastSync = todayISO(); saveSquare(); save(); renderSquare(); render();
+    $("squareMsg").textContent = `Synced: ${matched} item(s), ${units} units${unknown ? `, ${unknown} sale(s) of things not on the shelf` : ""}.`;
+  } catch (e) {
+    $("squareMsg").textContent = "Couldn't reach Square — check the register is connected and try again.";
+  }
+}
+$("squareSyncBtn").addEventListener("click", syncSquareSales);
+renderSquare();
 
 /* ---------- send by text service (Twilio worker, when set up) ---------- */
 async function sendAllByService() {
   const text = $("dealText").value;
   if (!regulars.length) { alert("No regulars to text."); return; }
   if (!settings.smsUrl) { alert("No text service set up yet — tap a regular's name instead."); return; }
+  // One call for the whole list. If the worker is the old single-send
+  // version it answers 400 to a list — then fall back to one call each.
+  try {
+    const res = await fetch(settings.smsUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: regulars.map((r) => r.phone), body: text }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(`Text service: ${data.sent ?? regulars.length} sent${data.failed ? `, ${data.failed} failed` : ""}.`);
+      return;
+    }
+    if (res.status !== 400) { alert(`Text service: ${res.status} — nothing sent.`); return; }
+  } catch (e) { alert("Couldn't reach the text service — check the address in Settings."); return; }
   let ok = 0, fail = 0;
   for (const reg of regulars) {
     try {
@@ -708,6 +997,108 @@ async function sendAllByService() {
   }
   alert(`Text service: ${ok} sent, ${fail} failed.`);
 }
+
+/* ---------- scan in a whole delivery (batch mode) ---------- */
+let sessStream = null, sessRaf = null, sessItems = [], lastScanCode = "", lastScanAt = 0;
+/** Add one scanned barcode to the shelf. `preset` ({name, cats}) skips the
+ *  network lookup — used by tests and by the typed-code path. */
+async function scanSessionAdd(code, preset) {
+  const found = preset || await lookupBarcode(code);
+  const name = (found.name || "").trim();
+  if (!name) {
+    $("sessMsg").textContent = `Barcode ${code}: no name found — add it by hand in "Add stock" below.`;
+    return null;
+  }
+  const shelf = findShelfLife(name, found.cats || []);
+  const needsPrinted = needsPrintedDate(name);
+  const expiry = needsPrinted ? null : addDays(todayISO(), shelf ? shelf.min_days : 5);
+  const qty = Math.max(1, parseInt($("sessQty").value, 10) || 1);
+  const priced = inventory.find((x) => x.barcode === code && x.price > 0);
+  const existing = inventory.find((x) => x.barcode === code && x.expiryISO === (expiry || addDays(todayISO(), 5)));
+  if (existing) {
+    existing.onHand += qty;
+  } else {
+    inventory.push({
+      id: "i" + Date.now() + Math.floor(Math.random() * 1000), name, barcode: code,
+      onHand: qty, price: priced ? priced.price : 0, receivedISO: todayISO(),
+      expiryISO: expiry || addDays(todayISO(), 5),
+      isUseBy: false, dateSource: "estimate",
+      sales: demoSales(1),
+    });
+  }
+  logEvent("received", name, 0, qty);
+  save(); render();
+  const row = sessItems.find((s) => s.code === code);
+  if (row) row.qty += qty;
+  else sessItems.push({ code, name, qty, expiry: expiry || addDays(todayISO(), 5) });
+  renderSessionList();
+  $("sessMsg").textContent = needsPrinted
+    ? `${name} added — it needs its printed date, check it on the shelf list.`
+    : `${name} added — good until ${fmtDate(expiry)}.`;
+  return name;
+}
+function renderSessionList() {
+  $("sessList").innerHTML = sessItems.map((s) => {
+    const item = inventory.find((x) => x.barcode === s.code);
+    const pricePart = item && item.price > 0
+      ? `${fmt$(item.price)} each`
+      : `<label style="font-weight:400">Price each $<input class="qty" type="number" min="0" step="0.01" value="0" data-sess-price="${s.code}" style="width:80px"></label>`;
+    return `<div class="meta">${s.name} — ${s.qty} scanned, good until ${fmtDate(s.expiry)} &middot; ${pricePart}</div>`;
+  }).join("");
+  $("sessList").querySelectorAll("[data-sess-price]").forEach((input) => input.addEventListener("change", () => {
+    const price = parseFloat(input.value) || 0;
+    inventory.filter((x) => x.barcode === input.getAttribute("data-sess-price") && x.price === 0)
+      .forEach((x) => { x.price = price; });
+    save(); render(); renderSessionList();
+  }));
+}
+$("sessAddBtn").addEventListener("click", async () => {
+  const code = $("sessCode").value.trim().replace(/\D/g, "");
+  if (!code) { $("sessMsg").textContent = "Type a barcode first."; return; }
+  await scanSessionAdd(code);
+  $("sessCode").value = "";
+});
+$("sessStartBtn").addEventListener("click", async () => {
+  if (!("BarcodeDetector" in window)) {
+    $("sessMsg").textContent = "This phone's browser can't scan barcodes — type them in the box above instead.";
+    return;
+  }
+  $("sessBox").style.display = "block";
+  $("sessStartBtn").style.display = "none";
+  $("sessStopBtn").style.display = "inline-block";
+  $("sessMsg").textContent = "Point the camera at a barcode…";
+  try {
+    sessStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+  } catch (e) { $("sessMsg").textContent = "Camera blocked — allow it and try again."; return; }
+  const video = $("sessVideo");
+  video.srcObject = sessStream;
+  await video.play();
+  const detector = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"] });
+  const tick = async () => {
+    try {
+      const codes = await detector.detect(video);
+      if (codes.length) {
+        const code = codes[0].rawValue;
+        // Same barcode twice in 2 seconds is one scan, not two.
+        if (code !== lastScanCode || Date.now() - lastScanAt > 2000) {
+          lastScanCode = code; lastScanAt = Date.now();
+          await scanSessionAdd(code);
+        }
+      }
+    } catch (e) { /* keep scanning */ }
+    sessRaf = requestAnimationFrame(tick);
+  };
+  tick();
+});
+function stopSession() {
+  if (sessRaf) cancelAnimationFrame(sessRaf);
+  if (sessStream) sessStream.getTracks().forEach((t) => t.stop());
+  sessStream = null;
+  $("sessBox").style.display = "none";
+  $("sessStopBtn").style.display = "none";
+  $("sessStartBtn").style.display = "inline-block";
+}
+$("sessStopBtn").addEventListener("click", stopSession);
 
 /* ---------- camera barcode scan ---------- */
 let camStream = null, camRaf = null;
