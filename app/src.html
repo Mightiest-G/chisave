@@ -62,6 +62,7 @@
   <p id="storeLine">Demo store &middot; <span id="todayLine"></span></p>
 </header>
 <main>
+  <p id="updateBar" style="display:none;background:#14532d;color:#fff;padding:10px 12px;border-radius:8px">A new version of ChiSave is ready. <button id="updateBtn" style="background:#fff;color:#14532d;border:0;border-radius:6px;padding:6px 10px">Reload to update</button></p>
   <div class="cards">
     <div class="card danger"><div class="big" id="statRisk">$0</div><div class="label">Food value about to be lost</div></div>
     <div class="card good"><div class="big" id="statRecover">$0</div><div class="label">You can save with today's markdowns</div></div>
@@ -710,6 +711,19 @@ $("installBtn").addEventListener("click", async () => {
   deferredInstall = null;
   $("installRow").style.display = "none";
 });
+
+/* ---------- update notice ---------- */
+// When a new version of the app is published, the browser fetches the new
+// service worker, which takes over at once (skipWaiting in sw.js). If this
+// phone already had the app open, the new version only shows after a
+// reload — so tell the clerk instead of silently staying on the old one.
+const hadController = !!("serviceWorker" in navigator && navigator.serviceWorker.controller);
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController) $("updateBar").style.display = "block";
+  });
+}
+$("updateBtn").addEventListener("click", () => location.reload());
 
 render();
 </script>

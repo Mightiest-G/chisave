@@ -89,12 +89,27 @@ web address it installs like an app:
   offline from the home screen.
 - A service worker only runs over **https** (or localhost), never from a
   plain file — so installing needs the app hosted on a real address.
-  Free options: Cloudflare Pages (the Legacilion account) or GitHub Pages.
-  That hosting step is not done yet.
+  **LIVE since 2026-11-23: https://mightiest-g.github.io/chisave/**
+  (GitHub Pages, repo Mightiest-G/chisave, published from `docs/`).
+  To update the live site: edit `app/src.html` (or manifest/icons/sw.js),
+  rerun `python3 app/build.py`, commit, push — Pages rebuilds in ~1 min.
 - The Play Store route (a real download like Redunator's APK) would wrap
   this same web app — it needs a $25 Play developer account + ID check,
   the step Redunator deliberately skipped for now. The PWA install skips
   all of that and is the right route for a pilot.
+
+## Updates — automatic, no store review
+
+Every `python3 app/build.py` stamps a new version into `sw.js`, so each
+push is a new version. An installed app picks it up on its own:
+
+- Closed app / next open: the new version is already there.
+- App open when a new version lands: a green bar appears at the top —
+  "A new version of ChiSave is ready — Reload to update." Tap it and the
+  new version loads. The store never has to reinstall or check for updates.
+
+That is the PWA equivalent of Redunator's in-app updater, minus the APK
+download — the update is just the new web files, fetched in the background.
 
 Open `app/index.html` in a browser (or serve the `app/` folder). Demo data
 is seeded on first run; everything saves in the browser. No account, no
