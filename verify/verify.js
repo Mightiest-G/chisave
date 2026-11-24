@@ -179,6 +179,109 @@ check("localStorage has app keys", keys.some((k) => k.startsWith("chisave." )), 
     check("square hash cleared from address", !w.location.hash.includes("square_token"));
   }
 
+  // price book: a scanned item takes the remembered price
+  {
+    const d = load({ "chisave.prices.v1": { "test beans": { price: 2.5, updated: today } } });
+    const w = d.window;
+    await w.scanSessionAdd("036800123456", { name: "Test Beans", cats: [] });
+    const inv = JSON.parse(w.localStorage.getItem("chisave.inventory.v1"));
+    const beans = inv.find((x) => x.name === "Test Beans");
+    check("price book fills scanned price", beans && beans.price === 2.5, beans && String(beans.price));
+  }
+
+  // barcode memory: the second lookup never hits the network
+  {
+    const d = load();
+    const w = d.window;
+    let fetches = 0;
+    w.fetch = async () => {
+      fetches++;
+      return { ok: true, json: async () => ({ status: 1, product: { product_name: "Cached Beans", categories_tags: [] } }) };
+    };
+    await w.lookupBarcode("012345678901");
+    await w.lookupBarcode("012345678901");
+    check("barcode memory: one network call for two lookups", fetches === 1, String(fetches));
+    check("barcode memory saved", !!JSON.parse(w.localStorage.getItem("chisave.barcodes.v1") || "{}")["012345678901"]);
+  }
+
+  // count fix: minus button drops on-hand by one
+  {
+    const d = load();
+    const w = d.window;
+    const minus = w.document.querySelector('[data-count][data-delta="-1"]');
+    check("count button exists", !!minus);
+    if (minus) minus.dispatchEvent(new w.Event("click", { bubbles: true }));
+    const inv = JSON.parse(w.localStorage.getItem("chisave.inventory.v1"));
+    const first = inv.find((x) => x.id === "d1");
+    check("count fix 18 -> 17", first && first.onHand === 17, first && String(first.onHand));
+  }
+
+  // tomorrow's preview lists what will need a markdown
+  {
+    const d = load();
+    const w = d.window;
+    const t = w.document.getElementById("tomorrowList").textContent;
+    check("tomorrow preview lists whole milk", t.includes("Whole milk"), t.trim().slice(0, 120));
+  }
+
+  // close the day: saves typed sales and reports the day
+  {
+    const d = load();
+    const w = d.window;
+    const input = w.document.querySelector("[data-sale]");
+    input.value = "2";
+    w.document.getElementById("closeDayBtn").dispatchEvent(new w.Event("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    check("close the day reports", w.document.getElementById("salesMsg").textContent.includes("Day closed"), w.document.getElementById("salesMsg").textContent);
+    const inv = JSON.parse(w.localStorage.getItem("chisave.inventory.v1"));
+    check("close the day saved the sale", inv[0].sales.some((s) => s.date === today && s.qty === 2));
+  }
+
+  // invoice parsing: known lines match with quantities, unknown lines skip
+  {
+    const d = load();
+    const w = d.window;
+    const lines = w.parseInvoiceLines(
+      "INVOICE 4821\nGround Beef 80/20 1lb 12 $5.99\nWhole Milk 1 Gal 6 $4.49\nRandom thing nobody stocks 3 $1.00\n");
+    check("invoice parse matches 2 lines", lines.length === 2, JSON.stringify(lines));
+    check("invoice parse quantities 12 and 6", lines[0] && lines[0].qty === 12 && lines[1] && lines[1].qty === 6, JSON.stringify(lines.map((l) => l.qty)));
+    check("invoice parse expiry set", lines.every((l) => /^\d{4}-\d{2}-\d{2}$/.test(l.expiryISO)));
+  }
+
+  // sync client: server state arrives, wrong code is refused
+  {
+    const remoteItem = { id: "rx", name: "Remote Beans", barcode: "", onHand: 4, price: 1.5, receivedISO: today, expiryISO: today, isUseBy: false, dateSource: "estimate", sales: [] };
+    const stub = async (url) => {
+      if (String(url).endsWith("/sync")) {
+        return { ok: true, status: 200, json: async () => ({ state: { inventory: { data: [remoteItem], updatedAt: 999 } } }) };
+      }
+      throw new Error("unexpected fetch " + url);
+    };
+    const d = new JSDOM(html, {
+      url: "https://mightiest-g.github.io/chisave/",
+      runScripts: "dangerously", pretendToBeVisual: true,
+      beforeParse(window) {
+        window.localStorage.setItem("chisave.settings.v1", JSON.stringify({ storeName: "Test Mart", smsUrl: "", syncUrl: "https://sync.test", syncSecret: "code-1" }));
+        window.fetch = stub;
+      },
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    const w = d.window;
+    check("sync: remote inventory arrives", JSON.parse(w.localStorage.getItem("chisave.inventory.v1")).some((x) => x.name === "Remote Beans"));
+    check("sync: status says synced", w.document.getElementById("syncMsg").textContent.includes("Synced"));
+    // Wrong code -> 401 -> plain message, no data applied.
+    const d2 = new JSDOM(html, {
+      url: "https://mightiest-g.github.io/chisave/",
+      runScripts: "dangerously", pretendToBeVisual: true,
+      beforeParse(window) {
+        window.localStorage.setItem("chisave.settings.v1", JSON.stringify({ storeName: "Test Mart", smsUrl: "", syncUrl: "https://sync.test", syncSecret: "bad-code" }));
+        window.fetch = async () => ({ ok: false, status: 401 });
+      },
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    check("sync: wrong code refused plainly", d2.window.document.getElementById("syncMsg").textContent.includes("sync code"));
+  }
+
   console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 })();

@@ -85,6 +85,8 @@
     <p class="hint">These items won't sell out before their date. Mark them down now, while they can still sell. Tick the box once you've changed the price at the register.</p>
     <div id="markdownList"></div>
     <p><button id="printLabelsBtn" class="secondary small">Print shelf labels</button></p>
+    <p class="hint" style="margin-top:14px"><b>Tomorrow's markdowns</b> — what will need marking down tomorrow, so the morning is never a surprise.</p>
+    <div id="tomorrowList"></div>
   </section>
 
   <section>
@@ -100,6 +102,7 @@
     <p class="hint">At closing, write how many of each item sold today. This is what the forecast learns from — the more days you log, the sharper it gets.</p>
     <div id="salesLog"></div>
     <button id="saveSalesBtn">Save today's sales</button>
+    <button id="closeDayBtn" class="secondary">Close the day</button>
     <span id="salesMsg" class="hint"></span>
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:14px 0">
     <p class="hint">Or load sales from your register: export <b>Item Sales</b> from Square or Clover as a CSV and pick the file.</p>
@@ -181,6 +184,18 @@
   </section>
 
   <section>
+    <h2>Add a delivery from an invoice photo</h2>
+    <p class="hint">Photograph the delivery invoice. The app reads the item names, matches them to foods it knows, and you check each line before anything is added — the reading is a guess, never silent.</p>
+    <input id="invPhoto" type="file" accept="image/*" capture="environment">
+    <div class="rowline">
+      <button id="invReadBtn" class="secondary">Read the invoice</button>
+      <button id="invAddBtn" style="display:none">Add checked items</button>
+    </div>
+    <span id="invMsg" class="hint"></span>
+    <div id="invList" style="margin-top:10px"></div>
+  </section>
+
+  <section>
     <h2>Everything on the shelf</h2>
     <div id="inventoryList"></div>
     <p><button id="resetBtn" class="secondary">Reset demo data</button></p>
@@ -205,6 +220,21 @@
         <button id="squareDisconnectBtn" class="secondary small" style="display:none">Disconnect</button>
       </div>
       <span id="squareMsg" class="hint"></span>
+    </div>
+    <div id="syncBox" style="margin-top:10px">
+      <label>Sync service web address (optional)</label>
+      <input id="setSyncUrl" placeholder="Leave blank — this phone stays on its own">
+      <p class="hint">With a sync service set up, this phone shares its stock, regulars and report with the store's other phones, and the morning deals can go out by themselves at 9am. The first phone to connect makes up a sync code — the other phones join with the same code.</p>
+      <label>Store sync code</label>
+      <div class="rowline">
+        <input id="setSyncSecret" placeholder="Made up on first sync">
+        <button id="newSecretBtn" class="secondary small">New code</button>
+      </div>
+      <div class="rowline">
+        <button id="syncNowBtn" class="secondary small">Sync now</button>
+        <span id="syncStatus" class="hint">Not synced.</span>
+      </div>
+      <span id="syncMsg" class="hint"></span>
     </div>
     <p style="margin-top:10px"><button id="saveSettingsBtn">Save settings</button>
     <span id="settingsMsg" class="hint"></span></p>
@@ -476,12 +506,39 @@ catch (e) { activity = []; }
 let learning;
 try { learning = JSON.parse(localStorage.getItem(LEARN_KEY) || "null") || {}; }
 catch (e) { learning = {}; }
+/** Price book: the last price used for each product, so a scanned item never
+ *  lands at $0 again. { normName: { price, updated } }. */
+const PRICE_KEY = "chisave.prices.v1";
+let priceBook;
+try { priceBook = JSON.parse(localStorage.getItem(PRICE_KEY) || "null") || {}; }
+catch (e) { priceBook = {}; }
+function savePriceBook() { localStorage.setItem(PRICE_KEY, JSON.stringify(priceBook)); }
+function rememberPrice(name, price) {
+  if (!name || !(price > 0)) return;
+  priceBook[normName(name)] = { price: +price, updated: todayISO() };
+  savePriceBook();
+}
+/** Barcode memory: barcodes already looked up, so repeat scans work
+ *  without internet. { code: { name, cats, saved } }. */
+const BARCODE_KEY = "chisave.barcodes.v1";
+let barcodeCache;
+try { barcodeCache = JSON.parse(localStorage.getItem(BARCODE_KEY) || "null") || {}; }
+catch (e) { barcodeCache = {}; }
+function saveBarcodeCache() { localStorage.setItem(BARCODE_KEY, JSON.stringify(barcodeCache)); }
+/** Per-kind timestamps for sync: when each list last changed on this phone.
+ *  The sync service keeps the newest version of each list. */
+const META_KEY = "chisave.meta.v1";
+let meta;
+try { meta = JSON.parse(localStorage.getItem(META_KEY) || "null") || {}; }
+catch (e) { meta = {}; }
+function saveMeta() { localStorage.setItem(META_KEY, JSON.stringify(meta)); }
+function touchMeta(kind) { meta[kind] = Date.now(); saveMeta(); }
 /** Square connection for the store's own register: { token, locationId, connectedAt, lastSync }. Pilot-grade storage: on this phone only. */
 let square;
 try { square = JSON.parse(localStorage.getItem(SQ_KEY) || "null") || {}; }
 catch (e) { square = {}; }
-function save() { localStorage.setItem(STORE_KEY, JSON.stringify(inventory)); }
-function saveLearning() { localStorage.setItem(LEARN_KEY, JSON.stringify(learning)); }
+function save() { localStorage.setItem(STORE_KEY, JSON.stringify(inventory)); touchMeta("inventory"); }
+function saveLearning() { localStorage.setItem(LEARN_KEY, JSON.stringify(learning)); touchMeta("learning"); }
 function saveSquare() { localStorage.setItem(SQ_KEY, JSON.stringify(square)); }
 /** Record what happened with a markdown so the next one learns from it. */
 function recordLearning(item, outcome) {
@@ -491,9 +548,9 @@ function recordLearning(item, outcome) {
   };
   saveLearning();
 }
-function saveRegulars() { localStorage.setItem(REG_KEY, JSON.stringify(regulars)); }
+function saveRegulars() { localStorage.setItem(REG_KEY, JSON.stringify(regulars)); touchMeta("regulars"); }
 function saveSettings() { localStorage.setItem(SET_KEY, JSON.stringify(settings)); }
-function saveActivity() { localStorage.setItem(ACT_KEY, JSON.stringify(activity)); }
+function saveActivity() { localStorage.setItem(ACT_KEY, JSON.stringify(activity)); touchMeta("activity"); }
 /** Record a money event for the weekly report: {date, kind, label, amount, count}. */
 function logEvent(kind, label, amount, count) {
   activity.push({ date: todayISO(), kind, label, amount: +amount.toFixed(2), count: count || 1 });
@@ -546,6 +603,15 @@ function render() {
     }
     save(); render();
   }));
+
+  // Tomorrow's markdowns: the same forecast run one day ahead, so the
+  // morning list is never a surprise.
+  const tomorrowRows = forecastInventory(inventory, addDays(todayISO(), 1), learning)
+    .filter((r) => r.forecast.status === "markdown" && !r.applied);
+  const tl = $("tomorrowList");
+  tl.innerHTML = tomorrowRows.length
+    ? tomorrowRows.map((r) => `<div class="meta">${r.name} — ${r.forecast.markdownPct}% off (was ${fmt$(r.price)}, now ${fmt$(r.forecast.markdownPrice)})</div>`).join("")
+    : '<p class="empty">Nothing due tomorrow.</p>';
 
   // deal text
   const dealLines = md.map((r) =>
@@ -645,7 +711,9 @@ function render() {
     const photo = r.datePhoto ? `<img class="thumb" src="${r.datePhoto}" alt="photo of the printed date">` : "";
     return `<div class="item ${r.applied ? "applied" : ""}">
       <div class="row"><span class="name">${r.name}</span><span class="price">${fmt$(r.price)}</span></div>
-      <div class="meta">${badge} ${src} &middot; ${r.onHand} on hand &middot; date ${fmtDate(r.expiryISO)}${r.isUseBy ? " (USE-BY)" : ""}${pullBtn}</div>
+      <div class="meta">${badge} ${src} &middot; ${r.onHand} on hand
+      <button class="secondary small" data-count="${r.id}" data-delta="-1" title="One fewer on the shelf">−</button><button class="secondary small" data-count="${r.id}" data-delta="1" title="One more on the shelf">+</button>
+      &middot; date ${fmtDate(r.expiryISO)}${r.isUseBy ? " (USE-BY)" : ""}${pullBtn}</div>
       <div class="meta">${f.reason}</div>${photo}
     </div>`;
   }).join("");
@@ -658,20 +726,36 @@ function render() {
     inventory = inventory.filter((x) => x.id !== item.id);
     save(); render();
   }));
+  // Count fix: the shelf never matches the app exactly. A tap corrects it;
+  // a wrong count quietly breaks the forecast, so this is a real fix, not a nicety.
+  il.querySelectorAll("[data-count]").forEach((b) => b.addEventListener("click", () => {
+    const item = inventory.find((x) => x.id === b.getAttribute("data-count"));
+    if (!item) return;
+    item.onHand = Math.max(0, item.onHand + parseInt(b.getAttribute("data-delta"), 10));
+    save(); render();
+  }));
 }
 
 /* ---------- receive flow ---------- */
-/** Look a barcode up in the free Open Food Facts database. */
+/** Look a barcode up in the free Open Food Facts database. Barcodes this
+ *  phone has already looked up come back from its own memory, no internet. */
 async function lookupBarcode(code) {
+  const cached = barcodeCache[code];
+  if (cached) return { name: cached.name, cats: cached.cats || [], found: true, offline: false, cached: true };
   try {
     const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json`);
     const data = await res.json();
     if (data.status === 1 && data.product) {
-      return { name: data.product.product_name || "", cats: data.product.categories_tags || [], found: true, offline: false };
+      const out = { name: data.product.product_name || "", cats: data.product.categories_tags || [], found: true, offline: false, cached: false };
+      if (out.name) {
+        barcodeCache[code] = { name: out.name, cats: out.cats, saved: todayISO() };
+        saveBarcodeCache();
+      }
+      return out;
     }
-    return { name: "", cats: [], found: false, offline: false };
+    return { name: "", cats: [], found: false, offline: false, cached: false };
   } catch (e) {
-    return { name: "", cats: [], found: false, offline: true };
+    return { name: "", cats: [], found: false, offline: true, cached: false };
   }
 }
 let pendingShelf = null;
@@ -684,7 +768,11 @@ $("lookupBtn").addEventListener("click", async () => {
   const name = found.name, cats = found.cats;
   msg.textContent = found.offline ? "No internet for the lookup — type the name below."
     : !found.found ? "Not in the free food database — type the name below."
-    : name ? `Found: ${name}` : "Found the barcode, but no name — type it below.";
+    : name ? `Found: ${name}` + (found.cached ? " (from this phone's memory)" : "")
+    : "Found the barcode, but no name — type it below.";
+  // The price book remembers what this product cost last time.
+  const knownPrice = priceBook[normName(name)];
+  if (knownPrice) $("pPrice").value = knownPrice.price;
   $("pName").value = name;
   $("pReceived").value = todayISO();
   pendingShelf = findShelfLife(name, cats);
@@ -727,6 +815,7 @@ $("addBtn").addEventListener("click", () => {
   if (pendingDatePhoto) item.datePhoto = pendingDatePhoto;
   inventory.push(item);
   logEvent("received", name, 0, qty);
+  rememberPrice(name, price);
   pendingDatePhoto = null;
   save();
   $("receiveForm").style.display = "none";
@@ -758,9 +847,10 @@ $("resetBtn").addEventListener("click", () => {
 });
 
 /* ---------- sales log + CSV import ---------- */
-$("saveSalesBtn").addEventListener("click", () => {
+/** Save the sales numbers typed in the log. Returns {changed, units}. */
+function saveTodaySales() {
   const today = todayISO();
-  let changed = 0;
+  let changed = 0, units = 0;
   document.querySelectorAll("[data-sale]").forEach((input) => {
     const item = inventory.find((x) => x.id === input.getAttribute("data-sale"));
     if (!item) return;
@@ -775,10 +865,27 @@ $("saveSalesBtn").addEventListener("click", () => {
       recordLearning(item, item.applied ? "cleared" : "held");
       logEvent("soldout", item.name, 0, 1);
     }
+    units += qty;
     changed++;
   });
-  save(); render();
+  save();
+  return { changed, units };
+}
+$("saveSalesBtn").addEventListener("click", () => {
+  const { changed } = saveTodaySales();
+  render();
   $("salesMsg").textContent = `Saved sales for ${changed} items.`;
+});
+$("closeDayBtn").addEventListener("click", async () => {
+  // The whole evening routine in one tap: Square first if the register is
+  // connected, then the typed sales, then tomorrow's list is on screen.
+  if (square.token) await syncSquareSales();
+  const { units } = saveTodaySales();
+  render();
+  const tomorrowRows = forecastInventory(inventory, addDays(todayISO(), 1), learning)
+    .filter((r) => r.forecast.status === "markdown" && !r.applied);
+  const worth = tomorrowRows.reduce((s, r) => s + r.forecast.predictedLeftover * r.forecast.markdownPrice, 0);
+  $("salesMsg").textContent = `Day closed: ${units} unit(s) sold today. Tomorrow: ${tomorrowRows.length} markdown(s), about ${fmt$(worth)} to save — see the list above.`;
 });
 
 function parseCSV(text) {
@@ -849,10 +956,12 @@ $("addRegBtn").addEventListener("click", () => {
 $("setStoreName").value = settings.storeName || "";
 $("setSmsUrl").value = settings.smsUrl || "";
 $("setSquareAuthUrl").value = settings.squareAuthUrl || "";
+$("setSyncUrl").value = settings.syncUrl || "";
 $("saveSettingsBtn").addEventListener("click", () => {
   settings.storeName = $("setStoreName").value.trim() || "our store";
   settings.smsUrl = $("setSmsUrl").value.trim();
   settings.squareAuthUrl = $("setSquareAuthUrl").value.trim();
+  settings.syncUrl = $("setSyncUrl").value.trim();
   saveSettings(); render();
   $("settingsMsg").textContent = "Saved.";
 });
@@ -966,6 +1075,77 @@ async function syncSquareSales() {
 $("squareSyncBtn").addEventListener("click", syncSquareSales);
 renderSquare();
 
+/* ---------- sync with the store's other phones ---------- */
+// Pilot-grade sync: last-write-wins PER LIST. The first phone to connect
+// claims the store with a secret code it makes up; the other phones join
+// with the same code. The service never sees a password — just the code.
+function makeSecret() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function renderSync() {
+  $("setSyncSecret").value = settings.syncSecret || "";
+  $("syncStatus").textContent = settings.lastSync
+    ? `Last synced ${settings.lastSync}.`
+    : "Not synced.";
+}
+function syncState() {
+  const state = {};
+  for (const kind of ["inventory", "regulars", "activity", "learning"]) {
+    const data = { inventory, regulars, activity, learning }[kind];
+    state[kind] = { data, updatedAt: meta[kind] || 0 };
+  }
+  state.meta = { data: { storeName: settings.storeName }, updatedAt: Date.now() };
+  return state;
+}
+function applySyncState(remote) {
+  if (!remote) return;
+  if (remote.inventory) inventory = remote.inventory.data;
+  if (remote.regulars) regulars = remote.regulars.data;
+  if (remote.activity) activity = remote.activity.data;
+  if (remote.learning) learning = remote.learning.data;
+  if (remote.meta && remote.meta.data.storeName) settings.storeName = remote.meta.data.storeName;
+  save(); saveRegulars(); saveActivity(); saveLearning(); saveSettings();
+}
+async function syncNow() {
+  const url = (settings.syncUrl || "").replace(/\/$/, "");
+  if (!url) { alert("Add the sync service web address in Settings first."); return; }
+  if (!settings.storeId) settings.storeId = "store-" + makeSecret().slice(0, 12);
+  if (!settings.syncSecret) settings.syncSecret = makeSecret();
+  saveSettings(); renderSync();
+  $("syncMsg").textContent = "Syncing…";
+  try {
+    const res = await fetch(url + "/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.syncSecret },
+      body: JSON.stringify({ storeId: settings.storeId, state: syncState() }),
+    });
+    if (res.status === 401) { $("syncMsg").textContent = "That sync code doesn't match this store — check the code."; return; }
+    if (!res.ok) throw new Error("sync failed " + res.status);
+    const remote = await res.json();
+    applySyncState(remote.state);
+    settings.lastSync = todayISO();
+    saveSettings(); renderSync(); render();
+    $("syncMsg").textContent = "Synced.";
+  } catch (e) {
+    $("syncMsg").textContent = "Couldn't reach the sync service — check the address and try again.";
+  }
+}
+$("syncNowBtn").addEventListener("click", syncNow);
+$("newSecretBtn").addEventListener("click", () => {
+  if (!confirm("Make a new sync code? The other phones will need the new code to keep syncing.")) return;
+  settings.syncSecret = makeSecret();
+  saveSettings(); renderSync();
+});
+$("setSyncSecret").addEventListener("change", () => {
+  settings.syncSecret = $("setSyncSecret").value.trim();
+  saveSettings(); renderSync();
+});
+renderSync();
+// If a sync service is set up, catch up with the other phones on open.
+if (settings.syncUrl) syncNow();
+
 /* ---------- send by text service (Twilio worker, when set up) ---------- */
 async function sendAllByService() {
   const text = $("dealText").value;
@@ -1013,14 +1193,16 @@ async function scanSessionAdd(code, preset) {
   const needsPrinted = needsPrintedDate(name);
   const expiry = needsPrinted ? null : addDays(todayISO(), shelf ? shelf.min_days : 5);
   const qty = Math.max(1, parseInt($("sessQty").value, 10) || 1);
+  const bookPrice = priceBook[normName(name)];
   const priced = inventory.find((x) => x.barcode === code && x.price > 0);
+  const unitPrice = bookPrice ? bookPrice.price : (priced ? priced.price : 0);
   const existing = inventory.find((x) => x.barcode === code && x.expiryISO === (expiry || addDays(todayISO(), 5)));
   if (existing) {
     existing.onHand += qty;
   } else {
     inventory.push({
       id: "i" + Date.now() + Math.floor(Math.random() * 1000), name, barcode: code,
-      onHand: qty, price: priced ? priced.price : 0, receivedISO: todayISO(),
+      onHand: qty, price: unitPrice, receivedISO: todayISO(),
       expiryISO: expiry || addDays(todayISO(), 5),
       isUseBy: false, dateSource: "estimate",
       sales: demoSales(1),
@@ -1047,8 +1229,11 @@ function renderSessionList() {
   }).join("");
   $("sessList").querySelectorAll("[data-sess-price]").forEach((input) => input.addEventListener("change", () => {
     const price = parseFloat(input.value) || 0;
-    inventory.filter((x) => x.barcode === input.getAttribute("data-sess-price") && x.price === 0)
+    const code = input.getAttribute("data-sess-price");
+    inventory.filter((x) => x.barcode === code && x.price === 0)
       .forEach((x) => { x.price = price; });
+    const row = sessItems.find((s) => s.code === code);
+    if (row) rememberPrice(row.name, price);
     save(); render(); renderSessionList();
   }));
 }
@@ -1099,6 +1284,101 @@ function stopSession() {
   $("sessStartBtn").style.display = "inline-block";
 }
 $("sessStopBtn").addEventListener("click", stopSession);
+
+/* ---------- add a delivery from an invoice photo ---------- */
+/** Add received stock, merging with the same product + same date already on
+ *  the shelf. Price comes from the price book when known. */
+function addReceived(name, qty, expiryISO, price, barcode) {
+  const existing = inventory.find((x) =>
+    normName(x.name) === normName(name) && x.expiryISO === expiryISO);
+  if (existing) {
+    existing.onHand += qty;
+  } else {
+    inventory.push({
+      id: "i" + Date.now() + Math.floor(Math.random() * 1000), name, barcode: barcode || "",
+      onHand: qty, price: price || 0, receivedISO: todayISO(),
+      expiryISO, isUseBy: false, dateSource: "estimate", sales: demoSales(1),
+    });
+  }
+  logEvent("received", name, 0, qty);
+  if (price) rememberPrice(name, price);
+}
+/** Read an invoice's text into stock lines. Matches each line against foods
+ *  the app already knows (shelf-life table + what's on the shelf). Returns
+ *  [{ line, name, qty, expiryISO }]. A line's quantity is the last standalone
+ *  number on it (not part of a price or a size like 80/20); the expiry comes
+ *  from the shelf-life table (careful end) or a 5-day default. */
+function parseInvoiceLines(text) {
+  const known = [];
+  for (const p of SHELF.products) known.push({ name: p.name, keywords: p.keywords, days: p.min_days });
+  for (const item of inventory) known.push({ name: item.name, keywords: [item.name.toLowerCase()], days: null });
+  const lines = String(text || "").split(/\n+/).map((l) => l.trim()).filter((l) => l.length > 2);
+  const out = [];
+  for (const line of lines) {
+    const hay = line.toLowerCase();
+    let best = null, bestScore = 0;
+    for (const k of known) {
+      let score = 0;
+      for (const kw of k.keywords || []) {
+        if (kw && hay.includes(kw)) score += kw.split(" ").length > 1 ? 3 : 1;
+      }
+      if (k.name && hay.includes(k.name.toLowerCase().split(",")[0])) score += 2;
+      if (score > bestScore) { bestScore = score; best = k; }
+    }
+    if (!best || bestScore < 2) continue;
+    const nums = [...line.matchAll(/(?:^|\s)(\d{1,3})(?![\d\/\.\w])/g)].map((m) => parseInt(m[1], 10));
+    const qty = nums.length ? Math.max(1, nums[nums.length - 1]) : 1;
+    const days = best.days != null ? best.days : 5;
+    out.push({ line, name: best.name, qty, expiryISO: addDays(todayISO(), days) });
+  }
+  return out;
+}
+let invLines = [];
+$("invReadBtn").addEventListener("click", async () => {
+  const file = $("invPhoto") && $("invPhoto").files[0];
+  const msg = $("invMsg");
+  if (!file) { msg.textContent = "Take a photo of the invoice first."; return; }
+  msg.textContent = "Reading the invoice…";
+  try {
+    if (!window.Tesseract) {
+      await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js");
+    }
+    const { data: { text } } = await window.Tesseract.recognize(file, "eng");
+    invLines = parseInvoiceLines(text);
+    if (!invLines.length) {
+      msg.textContent = "Couldn't match any lines to foods the app knows — add them by hand below.";
+      $("invList").innerHTML = "";
+      $("invAddBtn").style.display = "none";
+      return;
+    }
+    msg.textContent = `${invLines.length} line(s) matched. Check the amounts — the reading is a guess — then add them.`;
+    $("invList").innerHTML = invLines.map((l, i) =>
+      `<div class="rowline"><input type="checkbox" data-inv-check="${i}" checked style="width:auto;flex:none">
+       <span style="flex:1">${l.name} <span class="hint">(${l.line.slice(0, 40)})</span></span>
+       <input class="qty" type="number" min="1" value="${l.qty}" data-inv-qty="${i}"></div>`).join("");
+    $("invAddBtn").style.display = "inline-block";
+  } catch (e) {
+    msg.textContent = "Reading the invoice needs internet the first time — try again when you're online.";
+  }
+});
+$("invAddBtn").addEventListener("click", () => {
+  let added = 0;
+  document.querySelectorAll("[data-inv-check]").forEach((cb) => {
+    if (!cb.checked) return;
+    const i = +cb.getAttribute("data-inv-check");
+    const line = invLines[i];
+    const qtyInput = document.querySelector(`[data-inv-qty="${i}"]`);
+    const qty = Math.max(1, parseInt(qtyInput.value, 10) || 1);
+    const book = priceBook[normName(line.name)];
+    addReceived(line.name, qty, line.expiryISO, book ? book.price : 0);
+    added++;
+  });
+  save(); render();
+  $("invMsg").textContent = added ? `${added} item(s) added to the shelf.` : "Nothing checked.";
+  $("invList").innerHTML = "";
+  $("invAddBtn").style.display = "none";
+  invLines = [];
+});
 
 /* ---------- camera barcode scan ---------- */
 let camStream = null, camRaf = null;

@@ -79,17 +79,47 @@ instead of thrown away.
 - **Printable shelf labels** — "Print shelf labels" on the markdown list
   prints one label per item (was → now, % off, "today only").
 
-## What v2 does NOT have yet
+## What v3 adds (2026-11-24)
 
-- **Live Square/Twilio connections** — both are built and tested against
-  fake data, but no real Square or Twilio account has been connected, so
-  no live API call has ever run.
+- **One-tap "Close the day"** — Square sync first if the register is
+  connected, then the typed sales, then a summary (units sold today,
+  tomorrow's markdowns and what they're worth). The evening routine in one tap.
+- **Tomorrow's markdowns** — the same forecast run one day ahead, always on
+  screen under today's list, so the morning is never a surprise.
+- **Price book** — the last price for each product is remembered
+  (`chisave.prices.v1`), so scanned and invoice items never land at $0.
+  The add-stock form prefills it too.
+- **Offline barcode memory** — barcodes already looked up come back from
+  the phone's own memory (`chisave.barcodes.v1`); repeat scans work
+  without internet.
+- **Shelf count fix** — plus/minus buttons on every shelf item. A wrong
+  count quietly breaks the forecast, and counts always drift.
+- **Invoice photo receiving** — photograph a delivery invoice; the app
+  matches lines to foods it knows, guesses quantities, and the clerk
+  checks each line before adding. Best effort, never silent.
+- **Sync service (built, needs deploying)** — `server/chisave-sync.js`
+  (Cloudflare Worker + D1, `server/schema.sql`, `wrangler.toml`). One
+  backend for three things: same stock on two phones (last-write-wins per
+  list; first phone claims the store with a secret code), a public deals
+  page (`/deals?store=<id>`), and the 9am deal texts sent by the worker
+  itself (hourly check, Chicago time, once a day, Twilio). The app side
+  is in Settings ("Sync service web address" + "Store sync code") and
+  syncs on open. **NOT live yet** — deploying needs a Cloudflare API
+  token (the dashboard sign-in was Turnstile-blocked for the browser on
+  2026-11-23); the 9am texts also need the Twilio secrets on the worker.
+  Worker tests: `node --test server/sync.test.mjs` (7/7, D1 + Twilio mocked).
+
+## What v3 does NOT have yet
+
+- **Live sync / live Square / live Twilio connections** — all three are
+  built and tested against fake data, but no real account has been
+  connected, so no live API call has ever run.
 - **Camera date reading** — the photo + OCR path exists (Tesseract.js,
   best effort, clerk always confirms). It is a backup: most items never
   need it, because the USDA estimate covers them.
 - No customer app, no machine learning, no electronic shelf labels, no
-  wholesaler integration, no multi-device sync (data lives on the one
-  phone/tablet for the pilot).
+  wholesaler integration. Multi-device sync is built (see above) but not
+  deployed.
 
 ## Repo layout
 
@@ -102,8 +132,10 @@ instead of thrown away.
 - `data/` — `foodkeeper-661.json` (USDA FoodKeeper, public domain, CC0) and
   the build script. The official feed is
   https://www.fsis.usda.gov/shared/data/EN/foodkeeper.json
-- `server/` — `twilio-send.js` (bulk-text worker) and `square-oauth.js`
-  (Square register-link helper), both optional; see their headers.
+- `server/` — `twilio-send.js` (bulk-text worker), `square-oauth.js`
+  (Square register-link helper), `chisave-sync.js` + `schema.sql` (the
+  sync service), all optional; see their headers. `wrangler.toml` at the
+  repo root is for the sync worker.
 
 ## Run it / install it
 

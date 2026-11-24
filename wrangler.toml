@@ -1,0 +1,11 @@
+name = "chisave-sync"
+main = "server/chisave-sync.js"
+compatibility_date = "2026-11-24"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chisave-sync"
+database_id = ""  # filled in by `wrangler d1 create chisave-sync`
+
+[triggers]
+crons = ["0 * * * *"]  # hourly; the worker only sends at 9am Chicago time
